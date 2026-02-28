@@ -1,98 +1,99 @@
 use crate::config::Config;
 use crate::layout::{LayoutPreset, builtin_presets};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, Submenu};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
-pub struct TrayState {
-    _tray: tray_icon::TrayIcon,
-    open_id: tray_icon::menu::MenuId,
-    layout_items: Vec<(tray_icon::menu::MenuId, String, LayoutPreset)>,
-    quit_id: tray_icon::menu::MenuId,
+/// Holds the tray icon (must stay alive on the main thread — not Send).
+pub struct TrayIcon {
+    pub _tray: tray_icon::TrayIcon,
+}
+
+/// Menu IDs extracted from tray setup — Send + Clone, safe to move to a thread.
+pub struct TrayMenuIds {
+    pub open_id: MenuId,
+    pub quit_id: MenuId,
+    pub layout_items: Vec<(MenuId, String, LayoutPreset)>,
 }
 
 #[derive(Debug)]
 pub enum TrayAction {
     None,
-    ToggleGui,
+    ShowGui,
     ApplyLayout(String, LayoutPreset),
     Quit,
 }
 
-impl TrayState {
-    pub fn new(config: &Config) -> Option<Self> {
-        let menu = Menu::new();
+/// Create the tray icon (stays on main thread) and return the menu IDs (move to bg thread).
+pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
+    let menu = Menu::new();
 
-        let open_item = MenuItem::new("Open Window", true, None);
-        let open_id = open_item.id().clone();
-        let _ = menu.append(&open_item);
+    let open_item = MenuItem::new("Open Window", true, None);
+    let open_id = open_item.id().clone();
+    let _ = menu.append(&open_item);
 
-        let sep_top = tray_icon::menu::PredefinedMenuItem::separator();
-        let _ = menu.append(&sep_top);
+    let sep_top = tray_icon::menu::PredefinedMenuItem::separator();
+    let _ = menu.append(&sep_top);
 
-        let layouts_submenu = Submenu::new("Layouts", true);
-        let mut layout_items = Vec::new();
+    let layouts_submenu = Submenu::new("Layouts", true);
+    let mut layout_items = Vec::new();
 
-        // Built-in presets
-        for (name, preset) in builtin_presets() {
-            let item = MenuItem::new(&name, true, None);
-            let id = item.id().clone();
-            let _ = layouts_submenu.append(&item);
-            layout_items.push((id, name, preset));
-        }
-
-        // Custom presets from config
-        for layout_def in &config.layout {
-            if let Some(preset) = layout_def.to_preset() {
-                let item = MenuItem::new(&layout_def.name, true, None);
-                let id = item.id().clone();
-                let _ = layouts_submenu.append(&item);
-                layout_items.push((id, layout_def.name.clone(), preset));
-            }
-        }
-
-        let _ = menu.append(&layouts_submenu);
-
-        let separator = tray_icon::menu::PredefinedMenuItem::separator();
-        let _ = menu.append(&separator);
-
-        let quit_item = MenuItem::new("Quit", true, None);
-        let quit_id = quit_item.id().clone();
-        let _ = menu.append(&quit_item);
-
-        let icon = create_tray_icon()?;
-
-        let tray = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
-            .with_tooltip("PowerShell Manager")
-            .with_icon(icon)
-            .build()
-            .ok()?;
-
-        Some(Self {
-            _tray: tray,
-            open_id,
-            layout_items,
-            quit_id,
-        })
+    for (name, preset) in builtin_presets() {
+        let item = MenuItem::new(&name, true, None);
+        let id = item.id().clone();
+        let _ = layouts_submenu.append(&item);
+        layout_items.push((id, name, preset));
     }
 
+    for layout_def in &config.layout {
+        if let Some(preset) = layout_def.to_preset() {
+            let item = MenuItem::new(&layout_def.name, true, None);
+            let id = item.id().clone();
+            let _ = layouts_submenu.append(&item);
+            layout_items.push((id, layout_def.name.clone(), preset));
+        }
+    }
+
+    let _ = menu.append(&layouts_submenu);
+
+    let separator = tray_icon::menu::PredefinedMenuItem::separator();
+    let _ = menu.append(&separator);
+
+    let quit_item = MenuItem::new("Quit", true, None);
+    let quit_id = quit_item.id().clone();
+    let _ = menu.append(&quit_item);
+
+    let icon = create_tray_icon()?;
+
+    let tray = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("PowerShell Manager")
+        .with_icon(icon)
+        .build()
+        .ok()?;
+
+    Some((
+        TrayIcon { _tray: tray },
+        TrayMenuIds { open_id, quit_id, layout_items },
+    ))
+}
+
+impl TrayMenuIds {
+    /// Poll tray icon clicks and menu events. Call from a background thread.
     pub fn poll(&self) -> TrayAction {
-        // Check for left-click on tray icon
         if let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            match event {
-                TrayIconEvent::Click {
-                    button: tray_icon::MouseButton::Left,
-                    button_state: tray_icon::MouseButtonState::Up,
-                    ..
-                } => return TrayAction::ToggleGui,
-                _ => {}
+            if let TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                button_state: tray_icon::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                return TrayAction::ShowGui;
             }
         }
 
-        // Check menu events
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.open_id {
-                return TrayAction::ToggleGui;
+                return TrayAction::ShowGui;
             }
             if event.id == self.quit_id {
                 return TrayAction::Quit;
