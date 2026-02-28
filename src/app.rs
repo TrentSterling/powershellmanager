@@ -3,7 +3,7 @@ use crate::config::{self, Config};
 use crate::gui;
 use crate::layout::{LayoutPreset, builtin_presets};
 use crate::theme::THEMES;
-use crate::tray::{TrayAction, TrayState};
+use crate::tray;
 use crate::windows::{TargetFilter, find_terminal_windows, TerminalWindow};
 use raw_window_handle::HasWindowHandle;
 use std::collections::HashSet;
@@ -23,10 +23,9 @@ pub struct UpdateInfo {
 }
 
 pub struct PsmApp {
-    tray: Option<TrayState>,
+    _tray_icon: Option<tray::TrayIcon>, // must stay alive on main thread
     pub gui_visible: bool,
-    pending_visible: Option<bool>,
-    hwnd: Option<HWND>,
+    app_hwnd: isize,
     pub terminal_windows: Vec<TerminalWindow>,
     pub config: Config,
     pub presets: Vec<(String, LayoutPreset)>,
@@ -47,20 +46,36 @@ pub struct PsmApp {
 
 impl PsmApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: Config) -> Self {
-        let hwnd = cc
+        let app_hwnd = cc
             .window_handle()
             .ok()
             .and_then(|wh| {
                 if let raw_window_handle::RawWindowHandle::Win32(h) = wh.as_raw() {
-                    Some(HWND(h.hwnd.get() as *mut _))
+                    Some(h.hwnd.get() as isize)
                 } else {
                     None
                 }
-            });
+            })
+            .unwrap_or(0);
 
-        let tray = TrayState::new(&config);
-        if tray.is_none() {
-            log::warn!("Failed to create system tray icon");
+        // Create tray icon (stays on main thread) and extract menu IDs for bg thread.
+        let (tray_icon, tray_menu_ids) = match tray::create_tray(&config) {
+            Some((icon, ids)) => (Some(icon), Some(ids)),
+            None => {
+                log::warn!("Failed to create system tray icon");
+                (None, None)
+            }
+        };
+
+        // Spawn tray event thread — runs independently of eframe's render loop.
+        // eframe skips update() for hidden windows, so tray events must be polled here.
+        if let Some(menu_ids) = tray_menu_ids {
+            let ctx = cc.egui_ctx.clone();
+            let hwnd = app_hwnd;
+            let cfg = config.clone();
+            std::thread::spawn(move || {
+                tray_event_loop(menu_ids, ctx, hwnd, &cfg);
+            });
         }
 
         let mut presets = builtin_presets();
@@ -98,10 +113,9 @@ impl PsmApp {
         }
 
         let mut app = Self {
-            tray,
+            _tray_icon: tray_icon,
             gui_visible: true,
-            pending_visible: None,
-            hwnd,
+            app_hwnd,
             terminal_windows: Vec::new(),
             config,
             presets,
@@ -208,23 +222,9 @@ impl PsmApp {
         }
     }
 
-    fn show_window(&mut self) {
-        self.pending_visible = Some(true);
-        self.gui_visible = true;
-        self.refresh_windows();
-    }
-
     fn hide_window(&mut self) {
-        self.pending_visible = Some(false);
+        crate::windows::hide_app_window(self.app_hwnd);
         self.gui_visible = false;
-    }
-
-    fn toggle_gui(&mut self) {
-        if self.gui_visible {
-            self.hide_window();
-        } else {
-            self.show_window();
-        }
     }
 }
 
@@ -235,41 +235,23 @@ impl eframe::App for PsmApp {
             self.theme_dirty = false;
         }
 
-        // Apply pending visibility changes via eframe's viewport commands
-        if let Some(visible) = self.pending_visible.take() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
-            if visible {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-        }
-
+        // Intercept close button → hide to tray instead of closing
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         if close_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window();
         }
 
-        if let Some(tray) = &self.tray {
-            match tray.poll() {
-                TrayAction::ToggleGui => {
-                    self.toggle_gui();
-                }
-                TrayAction::ApplyLayout(_name, preset) => {
-                    let filter = TargetFilter::from_str(&self.config.defaults.target);
-                    let result = arrange::arrange_masked(
-                        &preset,
-                        filter,
-                        &self.config.defaults.monitor,
-                        self.config.defaults.gap,
-                        &self.disabled_cells,
-                        None,
-                    );
-                    log::info!("Tray: arranged {} windows", result.arranged);
-                }
-                TrayAction::Quit => {
-                    std::process::exit(0);
-                }
-                TrayAction::None => {}
+        // Check if the tray thread restored us
+        if !self.gui_visible {
+            // Window might have been shown by the tray thread — detect via repaint wake
+            let visible = unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+                IsWindowVisible(HWND(self.app_hwnd as *mut _)).as_bool()
+            };
+            if visible {
+                self.gui_visible = true;
+                self.refresh_windows();
             }
         }
 
@@ -281,7 +263,41 @@ impl eframe::App for PsmApp {
             gui::draw(ctx, self);
         }
 
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
+}
+
+/// Background thread that polls tray events independently of eframe's render loop.
+/// eframe skips update() for hidden windows, so tray events must be polled here.
+fn tray_event_loop(menu_ids: tray::TrayMenuIds, ctx: egui::Context, hwnd: isize, config: &Config) {
+    use crate::tray::TrayAction;
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        match menu_ids.poll() {
+            TrayAction::ShowGui => {
+                crate::windows::show_app_window(hwnd);
+                ctx.request_repaint();
+            }
+            TrayAction::ApplyLayout(_name, preset) => {
+                let filter = TargetFilter::from_str(&config.defaults.target);
+                let disabled = HashSet::new();
+                let result = arrange::arrange_masked(
+                    &preset,
+                    filter,
+                    &config.defaults.monitor,
+                    config.defaults.gap,
+                    &disabled,
+                    None,
+                );
+                log::info!("Tray: arranged {} windows", result.arranged);
+            }
+            TrayAction::Quit => {
+                std::process::exit(0);
+            }
+            TrayAction::None => {}
+        }
     }
 }
 

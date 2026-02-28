@@ -6,9 +6,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    GWL_EXSTYLE, GetWindowLongPtrW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
-    WS_EX_TOOLWINDOW,
+    BringWindowToTop, EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, GWL_EXSTYLE, GetWindowLongPtrW, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOW, SetForegroundWindow, ShowWindow, WS_EX_TOOLWINDOW,
 };
 
 #[derive(Debug, Clone)]
@@ -172,6 +172,25 @@ pub fn restore_window(hwnd: isize) {
         let h = HWND(hwnd as *mut _);
         let _ = ShowWindow(h, SW_RESTORE);
         let _ = SetForegroundWindow(h);
+    }
+}
+
+/// Show and restore the app window via direct Win32 calls.
+/// Works even when eframe's update loop is paused (hidden window).
+pub fn show_app_window(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let _ = ShowWindow(h, SW_SHOW);
+        let _ = ShowWindow(h, SW_RESTORE);
+        let _ = BringWindowToTop(h);
+        let _ = SetForegroundWindow(h);
+    }
+}
+
+/// Hide the app window via direct Win32 call.
+pub fn hide_app_window(hwnd: isize) {
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
     }
 }
 
