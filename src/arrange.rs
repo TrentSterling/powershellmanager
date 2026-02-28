@@ -1,4 +1,4 @@
-use crate::layout::LayoutPreset;
+use crate::layout::{LayoutPreset, compute_weighted_grid};
 use crate::monitor::{enumerate_monitors, resolve_monitor};
 use crate::windows::{TargetFilter, find_terminal_windows};
 use std::collections::HashSet;
@@ -18,6 +18,7 @@ pub fn arrange_masked(
     monitor_spec: &str,
     gap: i32,
     disabled: &HashSet<usize>,
+    weights: Option<(&[f32], &[f32])>,
 ) -> ArrangeResult {
     let monitors = enumerate_monitors();
     if monitors.is_empty() {
@@ -29,7 +30,11 @@ pub fn arrange_masked(
     }
 
     let monitor = resolve_monitor(&monitors, monitor_spec);
-    let all_slots = preset.compute_slots(&monitor.work_area, gap);
+    let all_slots = if let (Some((col_w, row_w)), LayoutPreset::Grid { cols, rows }) = (weights, preset) {
+        compute_weighted_grid(*cols, *rows, &monitor.work_area, gap, col_w, row_w)
+    } else {
+        preset.compute_slots(&monitor.work_area, gap)
+    };
 
     // Only use enabled slots
     let slots: Vec<_> = all_slots

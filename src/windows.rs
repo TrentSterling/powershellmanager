@@ -6,8 +6,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-    GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_TOOLWINDOW,
+    EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    GWL_EXSTYLE, GetWindowLongPtrW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
+    WS_EX_TOOLWINDOW,
 };
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct TerminalWindow {
     pub title: String,
     pub process_name: String,
     pub rect: Rect,
+    pub is_minimized: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,6 +118,8 @@ pub fn find_terminal_windows(filter: TargetFilter) -> Vec<TerminalWindow> {
             String::new()
         };
 
+        let is_minimized = IsIconic(hwnd).as_bool();
+
         state.results.push(TerminalWindow {
             hwnd: hwnd.0 as isize,
             title,
@@ -126,6 +130,7 @@ pub fn find_terminal_windows(filter: TargetFilter) -> Vec<TerminalWindow> {
                 w,
                 h,
             },
+            is_minimized,
         });
 
         TRUE
@@ -144,6 +149,30 @@ pub fn find_terminal_windows(filter: TargetFilter) -> Vec<TerminalWindow> {
     }
 
     state.results
+}
+
+pub fn focus_window(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        if IsIconic(h).as_bool() {
+            let _ = ShowWindow(h, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(h);
+    }
+}
+
+pub fn minimize_window(hwnd: isize) {
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_MINIMIZE);
+    }
+}
+
+pub fn restore_window(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let _ = ShowWindow(h, SW_RESTORE);
+        let _ = SetForegroundWindow(h);
+    }
 }
 
 fn get_process_name(pid: u32) -> Option<String> {

@@ -50,7 +50,7 @@ fn run_headless(layout_str: &str) {
 
     let filter = crate::windows::TargetFilter::from_str(&config.defaults.target);
     let disabled = std::collections::HashSet::new();
-    let result = arrange::arrange_masked(&preset, filter, &config.defaults.monitor, config.defaults.gap, &disabled);
+    let result = arrange::arrange_masked(&preset, filter, &config.defaults.monitor, config.defaults.gap, &disabled, None);
 
     println!(
         "Arranged {} windows into {} layout ({} slots)",
@@ -85,7 +85,7 @@ fn run_gui() {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
         .with_inner_size([480.0, 550.0])
-        .with_min_inner_size([380.0, 450.0]);
+        .with_min_inner_size([260.0, 300.0]);
 
     if let Some(icon) = load_window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
