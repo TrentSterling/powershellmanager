@@ -7,13 +7,25 @@ use crate::tray::{TrayAction, TrayState};
 use crate::windows::{TargetFilter, find_terminal_windows, TerminalWindow};
 use raw_window_handle::HasWindowHandle;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWDEFAULT, ShowWindow};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DividerAxis {
+    Col,
+    Row,
+}
+
+pub struct UpdateInfo {
+    pub latest_version: String,
+    pub download_url: String,
+}
 
 pub struct PsmApp {
     tray: Option<TrayState>,
     pub gui_visible: bool,
+    pending_visible: Option<bool>,
     hwnd: Option<HWND>,
     pub terminal_windows: Vec<TerminalWindow>,
     pub config: Config,
@@ -27,6 +39,10 @@ pub struct PsmApp {
     pub theme_index: usize,
     pub theme_dirty: bool,
     pub icon_texture: Option<egui::TextureHandle>,
+    pub update_info: Arc<Mutex<Option<UpdateInfo>>>,
+    pub col_weights: Vec<f32>,
+    pub row_weights: Vec<f32>,
+    pub dragging_divider: Option<(DividerAxis, usize)>,
 }
 
 impl PsmApp {
@@ -55,22 +71,53 @@ impl PsmApp {
         }
 
         let theme_index = config.defaults.theme.min(THEMES.len() - 1);
+        let selected_preset = config.defaults.selected_preset;
+        let custom_cols = config.defaults.custom_cols;
+        let custom_rows = config.defaults.custom_rows;
+        let use_custom = config.defaults.use_custom;
+
+        let col_weights = if config.defaults.col_weights.len() == custom_cols as usize {
+            config.defaults.col_weights.clone()
+        } else {
+            vec![1.0 / custom_cols as f32; custom_cols as usize]
+        };
+        let row_weights = if config.defaults.row_weights.len() == custom_rows as usize {
+            config.defaults.row_weights.clone()
+        } else {
+            vec![1.0 / custom_rows as f32; custom_rows as usize]
+        };
+
+        let update_info: Arc<Mutex<Option<UpdateInfo>>> = Arc::new(Mutex::new(None));
+
+        // Spawn background update checker
+        {
+            let info = Arc::clone(&update_info);
+            std::thread::spawn(move || {
+                check_for_updates(info);
+            });
+        }
+
         let mut app = Self {
             tray,
             gui_visible: true,
+            pending_visible: None,
             hwnd,
             terminal_windows: Vec::new(),
             config,
             presets,
-            selected_preset: 0,
+            selected_preset,
             last_refresh: Instant::now(),
-            custom_cols: 2,
-            custom_rows: 2,
-            use_custom: false,
+            custom_cols,
+            custom_rows,
+            use_custom,
             disabled_cells: HashSet::new(),
             theme_index,
             theme_dirty: true,
             icon_texture: None,
+            update_info,
+            col_weights,
+            row_weights,
+            dragging_divider: None,
         };
 
         app.refresh_windows();
@@ -91,15 +138,37 @@ impl PsmApp {
         }
     }
 
+    pub fn ensure_weights(&mut self) {
+        if self.col_weights.len() != self.custom_cols as usize {
+            self.col_weights = vec![1.0 / self.custom_cols as f32; self.custom_cols as usize];
+        }
+        if self.row_weights.len() != self.custom_rows as usize {
+            self.row_weights = vec![1.0 / self.custom_rows as f32; self.custom_rows as usize];
+        }
+    }
+
+    pub fn weights_are_uniform(&self) -> bool {
+        let eq_col = 1.0 / self.custom_cols as f32;
+        let eq_row = 1.0 / self.custom_rows as f32;
+        self.col_weights.iter().all(|w| (w - eq_col).abs() < 0.001)
+            && self.row_weights.iter().all(|w| (w - eq_row).abs() < 0.001)
+    }
+
     pub fn apply_current_layout(&self) {
         let preset = self.active_preset();
         let filter = TargetFilter::from_str(&self.config.defaults.target);
+        let weights = if self.use_custom && !self.weights_are_uniform() {
+            Some((self.col_weights.as_slice(), self.row_weights.as_slice()))
+        } else {
+            None
+        };
         let result = arrange::arrange_masked(
             &preset,
             filter,
             &self.config.defaults.monitor,
             self.config.defaults.gap,
             &self.disabled_cells,
+            weights,
         );
         log::info!(
             "Arranged {} windows ({} skipped, {} errors)",
@@ -140,20 +209,13 @@ impl PsmApp {
     }
 
     fn show_window(&mut self) {
-        if let Some(hwnd) = self.hwnd {
-            unsafe {
-                let _ = ShowWindow(hwnd, SW_SHOWDEFAULT);
-            }
-        }
+        self.pending_visible = Some(true);
         self.gui_visible = true;
+        self.refresh_windows();
     }
 
     fn hide_window(&mut self) {
-        if let Some(hwnd) = self.hwnd {
-            unsafe {
-                let _ = ShowWindow(hwnd, SW_HIDE);
-            }
-        }
+        self.pending_visible = Some(false);
         self.gui_visible = false;
     }
 
@@ -161,7 +223,6 @@ impl PsmApp {
         if self.gui_visible {
             self.hide_window();
         } else {
-            self.refresh_windows();
             self.show_window();
         }
     }
@@ -172,6 +233,14 @@ impl eframe::App for PsmApp {
         if self.theme_dirty {
             self.current_theme().apply_to_egui(ctx);
             self.theme_dirty = false;
+        }
+
+        // Apply pending visibility changes via eframe's viewport commands
+        if let Some(visible) = self.pending_visible.take() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
+            if visible {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
         }
 
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -193,6 +262,7 @@ impl eframe::App for PsmApp {
                         &self.config.defaults.monitor,
                         self.config.defaults.gap,
                         &self.disabled_cells,
+                        None,
                     );
                     log::info!("Tray: arranged {} windows", result.arranged);
                 }
@@ -213,4 +283,43 @@ impl eframe::App for PsmApp {
 
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
+}
+
+fn check_for_updates(info: Arc<Mutex<Option<UpdateInfo>>>) {
+    let result: Result<(), Box<dyn std::error::Error>> = (|| {
+        let resp = ureq::get("https://api.github.com/repos/TrentSterling/powershellmanager/releases/latest")
+            .set("User-Agent", "powershellmanager")
+            .set("Accept", "application/vnd.github+json")
+            .call()?;
+
+        let json: serde_json::Value = resp.into_json()?;
+        let tag = json["tag_name"].as_str().unwrap_or("");
+        let url = json["html_url"].as_str().unwrap_or("");
+
+        let latest = tag.strip_prefix('v').unwrap_or(tag);
+        let current = env!("CARGO_PKG_VERSION");
+
+        if !latest.is_empty() && latest != current && version_newer(latest, current) {
+            if let Ok(mut guard) = info.lock() {
+                *guard = Some(UpdateInfo {
+                    latest_version: latest.to_string(),
+                    download_url: url.to_string(),
+                });
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        log::debug!("Update check failed (non-fatal): {}", e);
+    }
+}
+
+fn version_newer(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<u32> {
+        v.split('.').filter_map(|s| s.parse().ok()).collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    l > c
 }

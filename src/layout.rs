@@ -243,6 +243,77 @@ impl LayoutPreset {
     }
 }
 
+/// Compute grid slots with per-column and per-row weight fractions.
+/// Weights are normalized fractions that sum to 1.0.
+pub fn compute_weighted_grid(
+    cols: u32,
+    rows: u32,
+    area: &Rect,
+    gap: i32,
+    col_weights: &[f32],
+    row_weights: &[f32],
+) -> Vec<Slot> {
+    let cols = cols as usize;
+    let rows = rows as usize;
+
+    let usable_w = area.w - gap * (cols as i32 - 1);
+    let usable_h = area.h - gap * (rows as i32 - 1);
+
+    // Compute column widths from weights
+    let mut col_widths: Vec<i32> = col_weights
+        .iter()
+        .map(|w| (usable_w as f32 * w) as i32)
+        .collect();
+    // Give leftover pixels to last column
+    let col_sum: i32 = col_widths.iter().sum();
+    if let Some(last) = col_widths.last_mut() {
+        *last += usable_w - col_sum;
+    }
+
+    // Compute row heights from weights
+    let mut row_heights: Vec<i32> = row_weights
+        .iter()
+        .map(|w| (usable_h as f32 * w) as i32)
+        .collect();
+    let row_sum: i32 = row_heights.iter().sum();
+    if let Some(last) = row_heights.last_mut() {
+        *last += usable_h - row_sum;
+    }
+
+    // Cumulative x positions
+    let mut col_x = Vec::with_capacity(cols);
+    let mut cx = area.x;
+    for (i, &cw) in col_widths.iter().enumerate() {
+        col_x.push(cx);
+        if i + 1 < cols {
+            cx += cw + gap;
+        }
+    }
+
+    // Cumulative y positions
+    let mut row_y = Vec::with_capacity(rows);
+    let mut cy = area.y;
+    for (i, &rh) in row_heights.iter().enumerate() {
+        row_y.push(cy);
+        if i + 1 < rows {
+            cy += rh + gap;
+        }
+    }
+
+    let mut slots = Vec::with_capacity(cols * rows);
+    for r in 0..rows {
+        for c in 0..cols {
+            slots.push(Slot {
+                x: col_x[c],
+                y: row_y[r],
+                w: col_widths[c],
+                h: row_heights[r],
+            });
+        }
+    }
+    slots
+}
+
 pub fn builtin_presets() -> Vec<(String, LayoutPreset)> {
     vec![
         ("1x2 Grid".into(), LayoutPreset::Grid { cols: 1, rows: 2 }),

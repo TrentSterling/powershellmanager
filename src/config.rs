@@ -20,6 +20,22 @@ pub struct Defaults {
     pub gap: i32,
     #[serde(default)]
     pub theme: usize,
+    #[serde(default = "default_true")]
+    pub settings_open: bool,
+    #[serde(default = "default_true")]
+    pub about_open: bool,
+    #[serde(default)]
+    pub use_custom: bool,
+    #[serde(default = "default_2")]
+    pub custom_cols: u32,
+    #[serde(default = "default_2")]
+    pub custom_rows: u32,
+    #[serde(default)]
+    pub selected_preset: usize,
+    #[serde(default)]
+    pub col_weights: Vec<f32>,
+    #[serde(default)]
+    pub row_weights: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +58,12 @@ fn default_monitor() -> String {
 fn default_gap() -> i32 {
     4
 }
+fn default_true() -> bool {
+    true
+}
+fn default_2() -> u32 {
+    2
+}
 
 impl Default for Defaults {
     fn default() -> Self {
@@ -50,6 +72,14 @@ impl Default for Defaults {
             monitor: default_monitor(),
             gap: default_gap(),
             theme: 0,
+            settings_open: true,
+            about_open: true,
+            use_custom: false,
+            custom_cols: 2,
+            custom_rows: 2,
+            selected_preset: 0,
+            col_weights: Vec::new(),
+            row_weights: Vec::new(),
         }
     }
 }
