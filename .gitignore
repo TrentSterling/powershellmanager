@@ -1,0 +1,6 @@
+/target
+*.exe
+!assets/*.ico
+
+log.txt
+.claude/
