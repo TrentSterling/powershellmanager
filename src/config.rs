@@ -3,11 +3,30 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedGrid {
+    pub name: String,
+    pub cols: u32,
+    pub rows: u32,
+    #[serde(default)]
+    pub col_weights: Vec<f32>,
+    #[serde(default)]
+    pub row_weights: Vec<f32>,
+    #[serde(default)]
+    pub disabled_cells: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
     pub layout: Vec<LayoutDef>,
+    #[serde(default)]
+    pub categories: CategoryOverrides,
+    #[serde(default)]
+    pub pin: Vec<PinRule>,
+    #[serde(default)]
+    pub saved_grid: Vec<SavedGrid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +55,10 @@ pub struct Defaults {
     pub col_weights: Vec<f32>,
     #[serde(default)]
     pub row_weights: Vec<f32>,
+    #[serde(default)]
+    pub smart_sort: bool,
+    #[serde(default = "default_decay_half_life")]
+    pub decay_half_life_days: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +70,35 @@ pub struct LayoutDef {
     pub style: Option<String>,
     #[serde(default)]
     pub count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CategoryOverrides {
+    #[serde(default)]
+    pub terminals: Vec<String>,
+    #[serde(default)]
+    pub editors: Vec<String>,
+    #[serde(default)]
+    pub browsers: Vec<String>,
+    #[serde(default)]
+    pub chat: Vec<String>,
+    #[serde(default)]
+    pub media: Vec<String>,
+    #[serde(default)]
+    pub games: Vec<String>,
+    #[serde(default)]
+    pub devtools: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinRule {
+    #[serde(default)]
+    pub process: Option<String>,
+    #[serde(default)]
+    pub title_contains: Option<String>,
+    pub slot: usize,
 }
 
 fn default_target() -> String {
@@ -64,6 +116,9 @@ fn default_true() -> bool {
 fn default_2() -> u32 {
     2
 }
+fn default_decay_half_life() -> f64 {
+    7.0
+}
 
 impl Default for Defaults {
     fn default() -> Self {
@@ -80,6 +135,8 @@ impl Default for Defaults {
             selected_preset: 0,
             col_weights: Vec::new(),
             row_weights: Vec::new(),
+            smart_sort: false,
+            decay_half_life_days: default_decay_half_life(),
         }
     }
 }
@@ -89,6 +146,9 @@ impl Default for Config {
         Self {
             defaults: Defaults::default(),
             layout: Vec::new(),
+            categories: CategoryOverrides::default(),
+            pin: Vec::new(),
+            saved_grid: Vec::new(),
         }
     }
 }
@@ -111,6 +171,30 @@ impl LayoutDef {
             }
         }
         None
+    }
+}
+
+impl CategoryOverrides {
+    /// Get the list of process names to exclude from window management.
+    pub fn excluded_lower(&self) -> Vec<String> {
+        self.exclude.iter().map(|s| s.to_lowercase()).collect()
+    }
+}
+
+impl PinRule {
+    /// Check if a window matches this pin rule.
+    pub fn matches(&self, process_name: &str, title: &str) -> bool {
+        if let Some(proc) = &self.process {
+            if process_name.to_lowercase() == proc.to_lowercase() {
+                return true;
+            }
+        }
+        if let Some(substr) = &self.title_contains {
+            if title.to_lowercase().contains(&substr.to_lowercase()) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -163,4 +247,9 @@ pub fn save(config: &Config) {
 
 fn config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".powershellmanager").join("config.toml"))
+}
+
+/// Path to the activity database file.
+pub fn activity_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".powershellmanager").join("activity.toml"))
 }

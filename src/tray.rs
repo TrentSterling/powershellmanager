@@ -12,14 +12,14 @@ pub struct TrayIcon {
 pub struct TrayMenuIds {
     pub open_id: MenuId,
     pub quit_id: MenuId,
-    pub layout_items: Vec<(MenuId, String, LayoutPreset)>,
+    pub layout_items: Vec<(MenuId, String, LayoutPreset, Option<(Vec<f32>, Vec<f32>)>)>,
 }
 
 #[derive(Debug)]
 pub enum TrayAction {
     None,
     ShowGui,
-    ApplyLayout(String, LayoutPreset),
+    ApplyLayout(String, LayoutPreset, Option<(Vec<f32>, Vec<f32>)>),
     Quit,
 }
 
@@ -41,7 +41,7 @@ pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
         let item = MenuItem::new(&name, true, None);
         let id = item.id().clone();
         let _ = layouts_submenu.append(&item);
-        layout_items.push((id, name, preset));
+        layout_items.push((id, name, preset, None));
     }
 
     for layout_def in &config.layout {
@@ -49,7 +49,20 @@ pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
             let item = MenuItem::new(&layout_def.name, true, None);
             let id = item.id().clone();
             let _ = layouts_submenu.append(&item);
-            layout_items.push((id, layout_def.name.clone(), preset));
+            layout_items.push((id, layout_def.name.clone(), preset, None));
+        }
+    }
+
+    if !config.saved_grid.is_empty() {
+        let _ = layouts_submenu.append(&tray_icon::menu::PredefinedMenuItem::separator());
+        for sg in &config.saved_grid {
+            let label = format!("{} ({}x{})", sg.name, sg.cols, sg.rows);
+            let item = MenuItem::new(&label, true, None);
+            let id = item.id().clone();
+            let _ = layouts_submenu.append(&item);
+            let weights = Some((sg.col_weights.clone(), sg.row_weights.clone()));
+            let preset = LayoutPreset::Grid { cols: sg.cols, rows: sg.rows };
+            layout_items.push((id, sg.name.clone(), preset, weights));
         }
     }
 
@@ -98,9 +111,9 @@ impl TrayMenuIds {
             if event.id == self.quit_id {
                 return TrayAction::Quit;
             }
-            for (id, name, preset) in &self.layout_items {
+            for (id, name, preset, weights) in &self.layout_items {
                 if event.id == *id {
-                    return TrayAction::ApplyLayout(name.clone(), preset.clone());
+                    return TrayAction::ApplyLayout(name.clone(), preset.clone(), weights.clone());
                 }
             }
         }

@@ -1,10 +1,11 @@
+use crate::activity::ActivityTracker;
 use crate::arrange;
 use crate::config::{self, Config};
 use crate::gui;
 use crate::layout::{LayoutPreset, builtin_presets};
 use crate::theme::THEMES;
 use crate::tray;
-use crate::windows::{TargetFilter, find_terminal_windows, TerminalWindow};
+use crate::windows::{ManagedWindow, TargetFilter, find_windows};
 use raw_window_handle::HasWindowHandle;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -25,8 +26,8 @@ pub struct UpdateInfo {
 pub struct PsmApp {
     _tray_icon: Option<tray::TrayIcon>, // must stay alive on main thread
     pub gui_visible: bool,
-    app_hwnd: isize,
-    pub terminal_windows: Vec<TerminalWindow>,
+    pub app_hwnd: isize,
+    pub managed_windows: Vec<ManagedWindow>,
     pub config: Config,
     pub presets: Vec<(String, LayoutPreset)>,
     pub selected_preset: usize,
@@ -42,6 +43,9 @@ pub struct PsmApp {
     pub col_weights: Vec<f32>,
     pub row_weights: Vec<f32>,
     pub dragging_divider: Option<(DividerAxis, usize)>,
+    pub activity: ActivityTracker,
+    pub save_grid_name: String,
+    pub show_save_dialog: bool,
 }
 
 impl PsmApp {
@@ -84,6 +88,12 @@ impl PsmApp {
                 presets.push((layout_def.name.clone(), preset));
             }
         }
+        for sg in &config.saved_grid {
+            presets.push((
+                sg.name.clone(),
+                LayoutPreset::Grid { cols: sg.cols, rows: sg.rows },
+            ));
+        }
 
         let theme_index = config.defaults.theme.min(THEMES.len() - 1);
         let selected_preset = config.defaults.selected_preset;
@@ -112,11 +122,13 @@ impl PsmApp {
             });
         }
 
+        let activity = ActivityTracker::new(config.defaults.decay_half_life_days);
+
         let mut app = Self {
             _tray_icon: tray_icon,
             gui_visible: true,
             app_hwnd,
-            terminal_windows: Vec::new(),
+            managed_windows: Vec::new(),
             config,
             presets,
             selected_preset,
@@ -132,6 +144,9 @@ impl PsmApp {
             col_weights,
             row_weights,
             dragging_divider: None,
+            activity,
+            save_grid_name: String::new(),
+            show_save_dialog: false,
         };
 
         app.refresh_windows();
@@ -176,13 +191,19 @@ impl PsmApp {
         } else {
             None
         };
+        let extra_exclude = self.config.categories.excluded_lower();
         let result = arrange::arrange_masked(
             &preset,
-            filter,
+            &filter,
             &self.config.defaults.monitor,
             self.config.defaults.gap,
             &self.disabled_cells,
             weights,
+            self.app_hwnd,
+            &extra_exclude,
+            self.config.defaults.smart_sort,
+            Some(&self.activity),
+            &self.config.pin,
         );
         log::info!(
             "Arranged {} windows ({} skipped, {} errors)",
@@ -197,7 +218,8 @@ impl PsmApp {
 
     pub fn refresh_windows(&mut self) {
         let filter = TargetFilter::from_str(&self.config.defaults.target);
-        self.terminal_windows = find_terminal_windows(filter);
+        let extra_exclude = self.config.categories.excluded_lower();
+        self.managed_windows = find_windows(&filter, self.app_hwnd, &extra_exclude);
         self.last_refresh = Instant::now();
     }
 
@@ -219,6 +241,74 @@ impl PsmApp {
             self.disabled_cells.remove(&index);
         } else {
             self.disabled_cells.insert(index);
+        }
+    }
+
+    pub fn load_saved_grid(&mut self, grid: &config::SavedGrid) {
+        self.use_custom = true;
+        self.custom_cols = grid.cols;
+        self.custom_rows = grid.rows;
+        self.col_weights = if grid.col_weights.len() == grid.cols as usize {
+            grid.col_weights.clone()
+        } else {
+            vec![1.0 / grid.cols as f32; grid.cols as usize]
+        };
+        self.row_weights = if grid.row_weights.len() == grid.rows as usize {
+            grid.row_weights.clone()
+        } else {
+            vec![1.0 / grid.rows as f32; grid.rows as usize]
+        };
+        self.disabled_cells = grid.disabled_cells.iter().copied().collect();
+
+        self.config.defaults.use_custom = true;
+        self.config.defaults.custom_cols = grid.cols;
+        self.config.defaults.custom_rows = grid.rows;
+        self.config.defaults.col_weights = self.col_weights.clone();
+        self.config.defaults.row_weights = self.row_weights.clone();
+        config::save(&self.config);
+    }
+
+    pub fn save_current_as_grid(&mut self, name: String) {
+        let grid = config::SavedGrid {
+            name: name.clone(),
+            cols: self.custom_cols,
+            rows: self.custom_rows,
+            col_weights: self.col_weights.clone(),
+            row_weights: self.row_weights.clone(),
+            disabled_cells: self.disabled_cells.iter().copied().collect(),
+        };
+        // Upsert: replace existing with same name
+        if let Some(existing) = self.config.saved_grid.iter_mut().find(|g| g.name == name) {
+            *existing = grid;
+        } else {
+            self.config.saved_grid.push(grid);
+        }
+        config::save(&self.config);
+        self.rebuild_presets();
+    }
+
+    pub fn delete_saved_grid(&mut self, name: &str) {
+        self.config.saved_grid.retain(|g| g.name != name);
+        config::save(&self.config);
+        self.rebuild_presets();
+    }
+
+    pub fn rebuild_presets(&mut self) {
+        let mut presets = builtin_presets();
+        for layout_def in &self.config.layout {
+            if let Some(preset) = layout_def.to_preset() {
+                presets.push((layout_def.name.clone(), preset));
+            }
+        }
+        for sg in &self.config.saved_grid {
+            presets.push((
+                sg.name.clone(),
+                LayoutPreset::Grid { cols: sg.cols, rows: sg.rows },
+            ));
+        }
+        self.presets = presets;
+        if self.selected_preset >= self.presets.len() {
+            self.selected_preset = 0;
         }
     }
 
@@ -244,7 +334,6 @@ impl eframe::App for PsmApp {
 
         // Check if the tray thread restored us
         if !self.gui_visible {
-            // Window might have been shown by the tray thread — detect via repaint wake
             let visible = unsafe {
                 use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
                 IsWindowVisible(HWND(self.app_hwnd as *mut _)).as_bool()
@@ -254,6 +343,9 @@ impl eframe::App for PsmApp {
                 self.refresh_windows();
             }
         }
+
+        // Update activity tracker (drains focus events)
+        self.activity.update();
 
         if self.gui_visible && self.last_refresh.elapsed().as_secs() >= 3 {
             self.refresh_windows();
@@ -268,32 +360,109 @@ impl eframe::App for PsmApp {
 }
 
 /// Background thread that polls tray events independently of eframe's render loop.
-/// eframe skips update() for hidden windows, so tray events must be polled here.
 fn tray_event_loop(menu_ids: tray::TrayMenuIds, ctx: egui::Context, hwnd: isize, config: &Config) {
     use crate::tray::TrayAction;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{MSG, PeekMessageW, PM_REMOVE, WM_HOTKEY};
+
+    const HOTKEY_ID: i32 = 1;
+    // 0x47 = 'G'
+    let hotkey_ok = unsafe {
+        RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 0x47)
+    };
+    if hotkey_ok.is_ok() {
+        log::info!("Registered global hotkey Ctrl+Alt+G");
+    } else {
+        log::warn!("Failed to register global hotkey Ctrl+Alt+G (already in use?)");
+    }
+
+    // Resolve the active preset from config (snapshot at startup)
+    let active_preset = if config.defaults.use_custom {
+        LayoutPreset::Grid {
+            cols: config.defaults.custom_cols,
+            rows: config.defaults.custom_rows,
+        }
+    } else {
+        let mut presets = builtin_presets();
+        for ld in &config.layout {
+            if let Some(p) = ld.to_preset() {
+                presets.push((ld.name.clone(), p));
+            }
+        }
+        presets
+            .get(config.defaults.selected_preset)
+            .map(|(_, p)| p.clone())
+            .unwrap_or(LayoutPreset::Grid { cols: 2, rows: 2 })
+    };
+    let hotkey_weights = if config.defaults.use_custom
+        && config.defaults.col_weights.len() == config.defaults.custom_cols as usize
+        && config.defaults.row_weights.len() == config.defaults.custom_rows as usize
+    {
+        Some((config.defaults.col_weights.clone(), config.defaults.row_weights.clone()))
+    } else {
+        None
+    };
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Poll WM_HOTKEY messages (thread-level, no window needed)
+        unsafe {
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, WM_HOTKEY, WM_HOTKEY, PM_REMOVE).as_bool() {
+                if msg.wParam.0 as i32 == HOTKEY_ID {
+                    log::info!("Hotkey Ctrl+Alt+G pressed — applying layout");
+                    let filter = TargetFilter::from_str(&config.defaults.target);
+                    let disabled = HashSet::new();
+                    let extra_exclude = config.categories.excluded_lower();
+                    let w = hotkey_weights.as_ref().map(|(c, r)| (c.as_slice(), r.as_slice()));
+                    let result = arrange::arrange_masked(
+                        &active_preset,
+                        &filter,
+                        &config.defaults.monitor,
+                        config.defaults.gap,
+                        &disabled,
+                        w,
+                        hwnd,
+                        &extra_exclude,
+                        false,
+                        None,
+                        &config.pin,
+                    );
+                    log::info!("Hotkey: arranged {} windows", result.arranged);
+                }
+            }
+        }
 
         match menu_ids.poll() {
             TrayAction::ShowGui => {
                 crate::windows::show_app_window(hwnd);
                 ctx.request_repaint();
             }
-            TrayAction::ApplyLayout(_name, preset) => {
+            TrayAction::ApplyLayout(_name, preset, weights) => {
                 let filter = TargetFilter::from_str(&config.defaults.target);
                 let disabled = HashSet::new();
+                let extra_exclude = config.categories.excluded_lower();
+                let w = weights.as_ref().map(|(c, r)| (c.as_slice(), r.as_slice()));
                 let result = arrange::arrange_masked(
                     &preset,
-                    filter,
+                    &filter,
                     &config.defaults.monitor,
                     config.defaults.gap,
                     &disabled,
+                    w,
+                    hwnd,
+                    &extra_exclude,
+                    false,
                     None,
+                    &config.pin,
                 );
                 log::info!("Tray: arranged {} windows", result.arranged);
             }
             TrayAction::Quit => {
+                unsafe { let _ = UnregisterHotKey(None, HOTKEY_ID); }
                 std::process::exit(0);
             }
             TrayAction::None => {}
