@@ -84,6 +84,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                             for win in &app.managed_windows {
                                 windows::restore_window(win.hwnd);
                             }
+                            windows::focus_window(app.app_hwnd);
                         }
                     }
                 });
