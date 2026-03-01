@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
 mod app;
 mod arrange;
 mod config;
@@ -14,7 +15,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "powershellmanager")]
-#[command(about = "System tray app for arranging terminal windows into grid layouts")]
+#[command(about = "Universal window manager with smart activity-based sorting")]
 struct Cli {
     /// Apply a layout and exit (e.g., "2x3", "columns:4", "left-right")
     #[arg(long)]
@@ -50,7 +51,20 @@ fn run_headless(layout_str: &str) {
 
     let filter = crate::windows::TargetFilter::from_str(&config.defaults.target);
     let disabled = std::collections::HashSet::new();
-    let result = arrange::arrange_masked(&preset, filter, &config.defaults.monitor, config.defaults.gap, &disabled, None);
+    let extra_exclude = config.categories.excluded_lower();
+    let result = arrange::arrange_masked(
+        &preset,
+        &filter,
+        &config.defaults.monitor,
+        config.defaults.gap,
+        &disabled,
+        None,
+        0, // no app_hwnd in headless
+        &extra_exclude,
+        false, // no smart sort in headless
+        None,
+        &config.pin,
+    );
 
     println!(
         "Arranged {} windows into {} layout ({} slots)",
@@ -84,7 +98,7 @@ fn run_gui() {
     let title = format!("PowerShell Manager v{}", env!("CARGO_PKG_VERSION"));
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
-        .with_inner_size([480.0, 550.0])
+        .with_inner_size([480.0, 600.0])
         .with_min_inner_size([260.0, 300.0]);
 
     if let Some(icon) = load_window_icon() {

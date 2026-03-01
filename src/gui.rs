@@ -18,6 +18,7 @@ fn load_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
 
 pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     let theme = app.current_theme().clone();
+    let narrow = ctx.screen_rect().width() < 280.0;
 
     // Load icon texture once, cache in app
     if app.icon_texture.is_none() {
@@ -26,24 +27,61 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
 
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("PowerShell Manager");
+            if narrow {
+                ui.label("PowerShell Manager");
+            } else {
+                ui.heading("PowerShell Manager");
+            }
+            ui.separator();
+
+            // Target mode toggle
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                let current = crate::windows::TargetFilter::from_str(&app.config.defaults.target);
+                let mut target_str = app.config.defaults.target.clone();
+
+                let terminals_selected = matches!(current, crate::windows::TargetFilter::Terminals);
+                let universal_selected = matches!(current, crate::windows::TargetFilter::Universal);
+
+                if ui.selectable_label(terminals_selected, "Terminals").clicked() && !terminals_selected {
+                    target_str = "terminals".to_string();
+                }
+                if ui.selectable_label(universal_selected, "Universal").clicked() && !universal_selected {
+                    target_str = "all".to_string();
+                }
+
+                if target_str != app.config.defaults.target {
+                    app.config.defaults.target = target_str;
+                    config::save(&app.config);
+                    app.refresh_windows();
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut smart = app.config.defaults.smart_sort;
+                    if ui.checkbox(&mut smart, "Smart Sort").changed() {
+                        app.config.defaults.smart_sort = smart;
+                        config::save(&app.config);
+                    }
+                });
+            });
+
             ui.separator();
 
             // Detected windows
             ui.horizontal(|ui| {
                 ui.label(format!(
-                    "Detected terminal windows: {}",
-                    app.terminal_windows.len()
+                    "Managed windows: {}",
+                    app.managed_windows.len()
                 ));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !app.terminal_windows.is_empty() {
-                        if ui.small_button("Minimize All").clicked() {
-                            for win in &app.terminal_windows {
+                    if !app.managed_windows.is_empty() {
+                        if ui.small_button(if narrow { "Min" } else { "Minimize All" }).clicked() {
+                            for win in &app.managed_windows {
                                 windows::minimize_window(win.hwnd);
                             }
                         }
-                        if ui.small_button("Restore All").clicked() {
-                            for win in &app.terminal_windows {
+                        if ui.small_button(if narrow { "Rst" } else { "Restore All" }).clicked() {
+                            for win in &app.managed_windows {
                                 windows::restore_window(win.hwnd);
                             }
                         }
@@ -51,32 +89,84 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 });
             });
 
+            let list_height = (ui.available_height() * 0.25).clamp(40.0, 200.0);
+            let narrow_list = narrow;
             egui::ScrollArea::vertical()
                 .id_salt("windows_list")
-                .max_height(160.0)
+                .max_height(list_height)
                 .show(ui, |ui| {
                     // Clone to avoid borrow issues with button clicks
-                    let wins: Vec<_> = app.terminal_windows.iter().cloned().collect();
-                    for win in &wins {
+                    let wins: Vec<_> = app.managed_windows.iter().cloned().collect();
+                    let scores = if app.config.defaults.smart_sort {
+                        app.activity.score_windows(&wins)
+                    } else {
+                        vec![0.0; wins.len()]
+                    };
+
+                    for (i, win) in wins.iter().enumerate() {
                         ui.horizontal(|ui| {
                             if ui.small_button("Focus").clicked() {
                                 windows::focus_window(win.hwnd);
                             }
+
+                            // Pin button
+                            let is_pinned = app.config.pin.iter().any(|p| {
+                                p.matches(&win.process_name, &win.title)
+                            });
+                            let pin_label = if is_pinned { "Unpin" } else { "Pin" };
+                            if ui.small_button(pin_label).clicked() {
+                                if is_pinned {
+                                    // Remove matching pin rule
+                                    app.config.pin.retain(|p| {
+                                        !p.matches(&win.process_name, &win.title)
+                                    });
+                                } else {
+                                    // Add pin rule for this process at slot 0 (or next available)
+                                    let next_slot = if app.config.pin.is_empty() {
+                                        0
+                                    } else {
+                                        app.config.pin.iter().map(|p| p.slot).max().unwrap_or(0) + 1
+                                    };
+                                    app.config.pin.push(config::PinRule {
+                                        process: Some(win.process_name.clone()),
+                                        title_contains: None,
+                                        slot: next_slot,
+                                    });
+                                }
+                                config::save(&app.config);
+                            }
+
                             if win.is_minimized {
                                 ui.colored_label(theme.text_muted, "[min]");
                             }
+
+                            // Category label
+                            ui.colored_label(
+                                theme.accent2,
+                                format!("[{}]", win.category.short_label()),
+                            );
+
                             ui.monospace(&win.process_name);
+
+                            // Score (if smart sort enabled, hidden when narrow)
+                            if !narrow_list && app.config.defaults.smart_sort && scores[i] > 0.1 {
+                                ui.colored_label(
+                                    theme.text_muted,
+                                    format!("{:.0}", scores[i]),
+                                );
+                            }
+
                             ui.label("\u{2014}");
-                            let title = if win.title.len() > 40 {
-                                format!("{}...", &win.title[..37])
+                            let title = if win.title.len() > 35 {
+                                format!("{}...", &win.title[..32])
                             } else {
                                 win.title.clone()
                             };
                             ui.label(title);
                         });
                     }
-                    if app.terminal_windows.is_empty() {
-                        ui.colored_label(theme.text_muted, "No terminal windows found.");
+                    if app.managed_windows.is_empty() {
+                        ui.colored_label(theme.text_muted, "No windows found.");
                     }
                 });
 
@@ -159,6 +249,14 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 if ui.button("Refresh").clicked() {
                     app.refresh_windows();
                 }
+                if app.use_custom {
+                    if ui.button("Save Grid").clicked() {
+                        app.show_save_dialog = !app.show_save_dialog;
+                        if app.show_save_dialog {
+                            app.save_grid_name.clear();
+                        }
+                    }
+                }
                 let enabled_count =
                     app.active_preset().slot_count() - app.disabled_cells.len();
                 ui.colored_label(
@@ -171,12 +269,58 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 );
             });
 
+            // Save grid name input dialog
+            if app.show_save_dialog {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    let resp = ui.text_edit_singleline(&mut app.save_grid_name);
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let can_save = !app.save_grid_name.trim().is_empty();
+                    if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() || (enter && can_save) {
+                        let name = app.save_grid_name.trim().to_string();
+                        app.save_current_as_grid(name);
+                        app.show_save_dialog = false;
+                    }
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        app.show_save_dialog = false;
+                    }
+                });
+            }
+
+            // Saved grids list
+            if !app.config.saved_grid.is_empty() {
+                ui.add_space(2.0);
+                ui.colored_label(theme.text_muted, "Saved grids:");
+                let grids: Vec<_> = app.config.saved_grid.clone();
+                for sg in &grids {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Load").clicked() {
+                            app.load_saved_grid(sg);
+                        }
+                        ui.label(&sg.name);
+                        ui.colored_label(
+                            theme.text_muted,
+                            format!("{}x{}", sg.cols, sg.rows),
+                        );
+                        if !sg.disabled_cells.is_empty() {
+                            ui.colored_label(
+                                theme.text_muted,
+                                format!("({} disabled)", sg.disabled_cells.len()),
+                            );
+                        }
+                        if ui.small_button("X").clicked() {
+                            app.delete_saved_grid(&sg.name.clone());
+                        }
+                    });
+                }
+            }
+
             ui.separator();
 
             // Interactive layout preview
             app.ensure_weights();
             ui.label("Preview (click cells to toggle):");
-            let action = draw_interactive_preview(ui, app, &theme);
+            let action = draw_interactive_preview(ui, ctx, app, &theme);
             match action {
                 PreviewAction::ToggleCell(cell_idx) => {
                     app.toggle_cell(cell_idx);
@@ -188,6 +332,45 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 }
                 PreviewAction::None => {}
             }
+
+            ui.separator();
+
+            // Activity stats (collapsible)
+            egui::CollapsingHeader::new("Activity")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let top = app.activity.top_apps(5);
+                    if top.is_empty() {
+                        ui.colored_label(theme.text_muted, "No activity data yet. Use apps for a bit.");
+                    } else {
+                        ui.colored_label(theme.text_muted, "Top apps by score:");
+                        for (name, score) in &top {
+                            ui.horizontal(|ui| {
+                                let cat = crate::windows::categorize_process(name);
+                                ui.colored_label(theme.accent2, format!("[{}]", cat.short_label()));
+                                ui.monospace(name);
+                                ui.colored_label(theme.text_muted, format!("  {:.0}", score));
+                            });
+                        }
+                    }
+
+                    ui.add_space(4.0);
+                    let session = app.activity.session_stats();
+                    if !session.is_empty() {
+                        ui.colored_label(theme.text_muted, "This session:");
+                        for (name, act) in session.iter().take(5) {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(theme.accent2, format!("[{}]", act.category.short_label()));
+                                ui.monospace(name);
+                                ui.colored_label(theme.text_muted, format_duration(act.focus_secs));
+                                ui.colored_label(
+                                    theme.text_muted,
+                                    format!("({} switches)", act.switch_count),
+                                );
+                            });
+                        }
+                    }
+                });
 
             ui.separator();
 
@@ -226,6 +409,33 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                             format!("{}px", app.config.defaults.gap),
                         );
                     });
+
+                    // Pinned windows
+                    if !app.config.pin.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label("Pinned windows:");
+                        let mut to_remove = Vec::new();
+                        for (i, rule) in app.config.pin.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(theme.accent, format!("Slot {}:", rule.slot));
+                                if let Some(proc) = &rule.process {
+                                    ui.monospace(proc);
+                                }
+                                if let Some(title) = &rule.title_contains {
+                                    ui.colored_label(theme.text_muted, format!("\"{}\"", title));
+                                }
+                                if ui.small_button("X").clicked() {
+                                    to_remove.push(i);
+                                }
+                            });
+                        }
+                        if !to_remove.is_empty() {
+                            for i in to_remove.into_iter().rev() {
+                                app.config.pin.remove(i);
+                            }
+                            config::save(&app.config);
+                        }
+                    }
                 });
             if settings_resp.header_response.clicked() {
                 app.config.defaults.settings_open = !app.config.defaults.settings_open;
@@ -256,7 +466,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     ui.add_space(4.0);
                     ui.colored_label(
                         theme.text_muted,
-                        "System tray tool for arranging terminal windows into grid layouts.",
+                        "Universal window manager with smart activity-based sorting.",
                     );
 
                     // Update banner
@@ -281,6 +491,16 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     });
 }
 
+fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.0}s", secs)
+    } else if secs < 3600.0 {
+        format!("{:.0}m", secs / 60.0)
+    } else {
+        format!("{:.1}h", secs / 3600.0)
+    }
+}
+
 enum PreviewAction {
     None,
     ToggleCell(usize),
@@ -296,16 +516,20 @@ impl PreviewAction {
 /// Draws interactive preview with optional draggable dividers (custom grid mode).
 fn draw_interactive_preview(
     ui: &mut egui::Ui,
+    ctx: &egui::Context,
     app: &mut PsmApp,
     theme: &Theme,
 ) -> PreviewAction {
     let preset = app.active_preset();
-    let window_count = app.terminal_windows.len();
+    let window_count = app.managed_windows.len();
     let show_dividers = app.use_custom && app.custom_cols > 0 && app.custom_rows > 0;
     let non_uniform = show_dividers && !app.weights_are_uniform();
 
-    let preview_width = ui.available_width().min(400.0).max(200.0);
-    let preview_height = preview_width * 9.0 / 16.0;
+    let panel_width = ctx.screen_rect().width();
+    let preview_width = (panel_width - 16.0).max(60.0);
+    let panel_height = ctx.screen_rect().height();
+    let max_preview_h = (panel_height * 0.4).max(40.0);
+    let preview_height = (preview_width * 9.0 / 16.0).min(max_preview_h);
     let preview_size = egui::vec2(preview_width, preview_height);
 
     let (response, painter) = ui.allocate_painter(preview_size, egui::Sense::click_and_drag());
@@ -517,47 +741,50 @@ fn draw_interactive_preview(
             egui::StrokeKind::Outside,
         );
 
-        if is_disabled {
-            painter.text(
-                slot_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "X",
-                egui::FontId::proportional(16.0),
-                theme.text_muted,
-            );
-        } else {
-            let label = format!("{}", i + 1);
-            if non_uniform && slot_rect.width() > 30.0 && slot_rect.height() > 30.0 {
-                // Show cell number above center and percentage below
-                let cols = app.custom_cols as usize;
-                let row = i / cols;
-                let col = i % cols;
-                let w_pct = (app.col_weights[col] * 100.0).round() as u32;
-                let h_pct = (app.row_weights[row] * 100.0).round() as u32;
-                let pct_label = format!("{}%x{}%", w_pct, h_pct);
-
-                painter.text(
-                    slot_rect.center() - egui::vec2(0.0, 7.0),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    egui::FontId::proportional(14.0),
-                    theme.text,
-                );
-                painter.text(
-                    slot_rect.center() + egui::vec2(0.0, 7.0),
-                    egui::Align2::CENTER_CENTER,
-                    pct_label,
-                    egui::FontId::proportional(9.0),
-                    theme.text_muted,
-                );
-            } else {
+        let cell_too_small = slot_rect.width() < 20.0 || slot_rect.height() < 20.0;
+        if !cell_too_small {
+            if is_disabled {
                 painter.text(
                     slot_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    label,
-                    egui::FontId::proportional(14.0),
-                    theme.text,
+                    "X",
+                    egui::FontId::proportional(16.0),
+                    theme.text_muted,
                 );
+            } else {
+                let label = format!("{}", i + 1);
+                if non_uniform && slot_rect.width() > 30.0 && slot_rect.height() > 30.0 {
+                    // Show cell number above center and percentage below
+                    let cols = app.custom_cols as usize;
+                    let row = i / cols;
+                    let col = i % cols;
+                    let w_pct = (app.col_weights[col] * 100.0).round() as u32;
+                    let h_pct = (app.row_weights[row] * 100.0).round() as u32;
+                    let pct_label = format!("{}%x{}%", w_pct, h_pct);
+
+                    painter.text(
+                        slot_rect.center() - egui::vec2(0.0, 7.0),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(14.0),
+                        theme.text,
+                    );
+                    painter.text(
+                        slot_rect.center() + egui::vec2(0.0, 7.0),
+                        egui::Align2::CENTER_CENTER,
+                        pct_label,
+                        egui::FontId::proportional(9.0),
+                        theme.text_muted,
+                    );
+                } else {
+                    painter.text(
+                        slot_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(14.0),
+                        theme.text,
+                    );
+                }
             }
         }
     }
