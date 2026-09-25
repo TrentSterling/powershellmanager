@@ -27,7 +27,7 @@ impl LayoutPreset {
         if let Some((c, r)) = s.split_once('x') {
             let cols = c.trim().parse::<u32>().ok()?;
             let rows = r.trim().parse::<u32>().ok()?;
-            if cols > 0 && rows > 0 {
+            if (1..=8).contains(&cols) && (1..=8).contains(&rows) {
                 return Some(Self::Grid { cols, rows });
             }
         }
@@ -35,7 +35,7 @@ impl LayoutPreset {
         // "columns:4" or "columns 4"
         if let Some(rest) = s.strip_prefix("columns") {
             let n = rest.trim_start_matches(':').trim().parse::<u32>().ok()?;
-            if n > 0 {
+            if (1..=8).contains(&n) {
                 return Some(Self::Columns(n));
             }
         }
@@ -43,7 +43,7 @@ impl LayoutPreset {
         // "rows:3" or "rows 3"
         if let Some(rest) = s.strip_prefix("rows") {
             let n = rest.trim_start_matches(':').trim().parse::<u32>().ok()?;
-            if n > 0 {
+            if (1..=8).contains(&n) {
                 return Some(Self::Rows(n));
             }
         }
@@ -62,7 +62,14 @@ impl LayoutPreset {
                 .trim_start_matches("mainside")
                 .trim_start_matches(':')
                 .trim();
-            let n = rest.parse::<u32>().unwrap_or(2);
+            let n = if rest.is_empty() {
+                2
+            } else {
+                rest.parse::<u32>().ok()?
+            };
+            if !(1..=8).contains(&n) {
+                return None;
+            }
             return Some(Self::MainSide {
                 side_count: n.max(1),
             });
@@ -70,7 +77,14 @@ impl LayoutPreset {
 
         if s.starts_with("focus") {
             let rest = s.trim_start_matches("focus").trim_start_matches(':').trim();
-            let n = rest.parse::<u32>().unwrap_or(3);
+            let n = if rest.is_empty() {
+                3
+            } else {
+                rest.parse::<u32>().ok()?
+            };
+            if !(1..=8).contains(&n) {
+                return None;
+            }
             return Some(Self::Focus {
                 side_count: n.max(1),
             });
@@ -79,7 +93,21 @@ impl LayoutPreset {
         None
     }
 
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Grid { cols, rows } => (1..=8).contains(cols) && (1..=8).contains(rows),
+            Self::Columns(n) | Self::Rows(n) => (1..=8).contains(n),
+            Self::MainSide { side_count } | Self::Focus { side_count } => {
+                (1..=8).contains(side_count)
+            }
+            _ => true,
+        }
+    }
     pub fn slot_count(&self) -> usize {
+        if !self.valid() {
+            return 0;
+        }
+
         match self {
             Self::Grid { cols, rows } => (*cols as usize) * (*rows as usize),
             Self::Columns(n) => *n as usize,
@@ -92,6 +120,21 @@ impl LayoutPreset {
     }
 
     pub fn compute_slots(&self, area: &Rect, gap: i32) -> Vec<Slot> {
+        if !self.valid() || area.w < 8 || area.h < 8 {
+            return Vec::new();
+        }
+        let gap = gap.clamp(0, 64).min((area.w.min(area.h) / 8 - 1).max(0));
+        if let Self::Grid { cols, rows } = self {
+            return compute_weighted_grid(
+                *cols,
+                *rows,
+                area,
+                gap,
+                &vec![1.0; *cols as usize],
+                &vec![1.0; *rows as usize],
+            );
+        }
+
         match self {
             Self::Grid { cols, rows } => {
                 let cols = *cols as i32;
@@ -250,52 +293,56 @@ pub fn compute_weighted_grid(
     col_weights: &[f32],
     row_weights: &[f32],
 ) -> Vec<Slot> {
+    if !(1..=8).contains(&cols)
+        || !(1..=8).contains(&rows)
+        || area.w < cols as i32
+        || area.h < rows as i32
+    {
+        return Vec::new();
+    }
+    let gap = gap
+        .clamp(0, 64)
+        .min(((area.w - cols as i32) / cols as i32).min((area.h - rows as i32) / rows as i32));
     let cols = cols as usize;
     let rows = rows as usize;
-
-    let usable_w = area.w - gap * (cols as i32 - 1);
-    let usable_h = area.h - gap * (rows as i32 - 1);
-
-    // Compute column widths from weights
-    let mut col_widths: Vec<i32> = col_weights
-        .iter()
-        .map(|w| (usable_w as f32 * w) as i32)
-        .collect();
-    // Give leftover pixels to last column
-    let col_sum: i32 = col_widths.iter().sum();
-    if let Some(last) = col_widths.last_mut() {
-        *last += usable_w - col_sum;
-    }
-
-    // Compute row heights from weights
-    let mut row_heights: Vec<i32> = row_weights
-        .iter()
-        .map(|w| (usable_h as f32 * w) as i32)
-        .collect();
-    let row_sum: i32 = row_heights.iter().sum();
-    if let Some(last) = row_heights.last_mut() {
-        *last += usable_h - row_sum;
-    }
-
-    // Cumulative x positions
-    let mut col_x = Vec::with_capacity(cols);
-    let mut cx = area.x;
-    for (i, &cw) in col_widths.iter().enumerate() {
-        col_x.push(cx);
-        if i + 1 < cols {
-            cx += cw + gap;
+    // Rounded cumulative boundaries distribute remainder pixels without seams.
+    fn axis(
+        origin: i32,
+        extent: i32,
+        gap: i32,
+        count: usize,
+        values: &[f32],
+    ) -> (Vec<i32>, Vec<i32>) {
+        let sum: f64 = values.iter().map(|v| *v as f64).sum();
+        let valid = values.len() == count
+            && sum.is_finite()
+            && sum > 0.0
+            && values.iter().all(|v| v.is_finite() && *v > 0.0);
+        let available = extent - gap * (count as i32 - 1);
+        let mut positions = Vec::new();
+        let mut sizes = Vec::new();
+        let mut cumulative = 0.0;
+        let mut previous = 0;
+        for i in 0..count {
+            cumulative += if valid {
+                values.get(i).copied().unwrap_or(1.0) as f64 / sum
+            } else {
+                1.0 / count as f64
+            };
+            let end = if i + 1 == count {
+                available
+            } else {
+                (cumulative * available as f64).round() as i32
+            }
+            .clamp(previous + 1, available - (count - i - 1) as i32);
+            positions.push(origin + previous + gap * i as i32);
+            sizes.push(end - previous);
+            previous = end;
         }
+        (positions, sizes)
     }
-
-    // Cumulative y positions
-    let mut row_y = Vec::with_capacity(rows);
-    let mut cy = area.y;
-    for (i, &rh) in row_heights.iter().enumerate() {
-        row_y.push(cy);
-        if i + 1 < rows {
-            cy += rh + gap;
-        }
-    }
+    let (col_x, col_widths) = axis(area.x, area.w, gap, cols, col_weights);
+    let (row_y, row_heights) = axis(area.y, area.h, gap, rows, row_weights);
 
     let mut slots = Vec::with_capacity(cols * rows);
     for r in 0..rows {

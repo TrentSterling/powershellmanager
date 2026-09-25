@@ -3,10 +3,14 @@
 mod activity;
 mod app;
 mod arrange;
+mod branding;
 mod config;
 mod gui;
 mod layout;
 mod monitor;
+#[cfg(test)]
+mod native_audit;
+mod order;
 mod theme;
 mod theme_studio;
 mod tray;
@@ -60,17 +64,19 @@ fn run_headless(layout_str: &str) {
     let filter = crate::windows::TargetFilter::from_str(&config.defaults.target);
     let disabled = std::collections::HashSet::new();
     let extra_exclude = config.categories.excluded_lower();
-    let result = arrange::arrange_masked(
+    let fresh = windows::find_windows(&filter, 0, &extra_exclude);
+    let queue = if config.defaults.manual_order {
+        order::reconcile(fresh, &[], &config.window_order)
+    } else {
+        fresh
+    };
+    let result = arrange::arrange_ordered(
         &preset,
-        &filter,
         &config.defaults.monitor,
         config.defaults.gap,
         &disabled,
         None,
-        0, // no app_hwnd in headless
-        &extra_exclude,
-        false, // no smart sort in headless
-        None,
+        &queue,
         &config.pin,
     );
 
@@ -83,21 +89,15 @@ fn run_headless(layout_str: &str) {
     if result.skipped > 0 {
         println!("Skipped {} windows (not enough slots)", result.skipped);
     }
+    for warning in &result.warnings {
+        eprintln!("Warning: {warning}");
+    }
     for err in &result.errors {
         eprintln!("Error: {}", err);
     }
-}
-
-fn load_window_icon() -> Option<egui::IconData> {
-    static ICON_PNG: &[u8] = include_bytes!("../assets/tront-icon.png");
-    let img = image::load_from_memory(ICON_PNG).ok()?;
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-    Some(egui::IconData {
-        rgba: rgba.into_raw(),
-        width: w,
-        height: h,
-    })
+    if !result.errors.is_empty() {
+        std::process::exit(2);
+    }
 }
 
 fn run_gui(preview: bool) {
@@ -111,11 +111,15 @@ fn run_gui(preview: bool) {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
         .with_inner_size([1080.0, 800.0])
-        .with_min_inner_size([440.0, 480.0]);
+        .with_min_inner_size([280.0, 300.0]);
 
-    if let Some(icon) = load_window_icon() {
-        viewport = viewport.with_icon(std::sync::Arc::new(icon));
-    }
+    let theme = config
+        .defaults
+        .theme_code
+        .as_deref()
+        .and_then(theme::ThemeSettings::decode)
+        .unwrap_or_default();
+    viewport = viewport.with_icon(std::sync::Arc::new(branding::icon(theme, 64)));
 
     let options = eframe::NativeOptions {
         viewport,

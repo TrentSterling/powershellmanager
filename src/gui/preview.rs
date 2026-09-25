@@ -19,7 +19,6 @@ pub(super) fn draw_interactive_preview(
     theme: &Theme,
 ) -> PreviewAction {
     let preset = app.active_preset();
-    let window_count = app.managed_windows.len();
     let show_dividers = app.use_custom && app.custom_cols > 0 && app.custom_rows > 0;
     let non_uniform = show_dividers && !app.weights_are_uniform();
 
@@ -214,7 +213,7 @@ pub(super) fn draw_interactive_preview(
     }
 
     // Draw cells
-    let mut enabled_idx = 0;
+    let assignment = app.assignment();
     let mut clicked_cell = None;
     let click_pos =
         if response.clicked() && app.dragging_divider.is_none() && hovered_divider.is_none() {
@@ -240,13 +239,9 @@ pub(super) fn draw_interactive_preview(
             }
         }
 
-        let has_window = if is_disabled {
-            false
-        } else {
-            let has = enabled_idx < window_count;
-            enabled_idx += 1;
-            has
-        };
+        let assigned = assignment.slots.get(i).copied().flatten();
+        let manual_title = assigned.map(|w| app.managed_windows[w].title.as_str());
+        let has_window = assigned.is_some();
 
         let color = if is_disabled {
             theme.cell_disabled
@@ -273,6 +268,26 @@ pub(super) fn draw_interactive_preview(
             egui::StrokeKind::Outside,
         );
 
+        if let Some(title) = manual_title {
+            if slot_rect.width() > 100.0 && slot_rect.height() > 105.0 {
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    title.into(),
+                    egui::FontId::proportional(12.0),
+                    theme.text,
+                );
+                job.wrap.max_width = slot_rect.width() - 16.0;
+                job.wrap.max_rows = 1;
+                let galley = ui.fonts(|f| f.layout_job(job));
+                painter.galley(
+                    egui::pos2(
+                        slot_rect.center().x - galley.size().x / 2.0,
+                        slot_rect.bottom() - 28.0,
+                    ),
+                    galley,
+                    theme.text,
+                );
+            }
+        }
         let cell_too_small = slot_rect.width() < 20.0 || slot_rect.height() < 20.0;
         if !cell_too_small {
             if is_disabled {

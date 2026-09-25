@@ -229,7 +229,7 @@ impl ActivityTracker {
             if let Ok(db) = self.db.lock() {
                 match toml::to_string_pretty(&*db) {
                     Ok(content) => {
-                        if let Err(e) = std::fs::write(&path, &content) {
+                        if let Err(e) = crate::config::atomic_write(&path, content.as_bytes()) {
                             log::warn!("Failed to save activity: {}", e);
                         }
                     }

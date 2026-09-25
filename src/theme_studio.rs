@@ -52,7 +52,7 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
         .id(egui::Id::new("psm-theme-studio"))
         .open(&mut open)
         .default_width(410.0)
-        .min_width(300.0)
+        .min_width((ctx.screen_rect().width() - 32.0).clamp(180.0, 300.0))
         .default_height(780.0)
         .default_pos(egui::pos2(
             (ctx.screen_rect().width() - 440.0).max(8.0),

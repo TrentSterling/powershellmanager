@@ -21,8 +21,10 @@ pub struct NamedTheme {
     pub code: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub window_order: Vec<crate::order::WindowKey>,
     #[serde(default)]
     pub saved_theme: Vec<NamedTheme>,
     #[serde(default)]
@@ -71,6 +73,8 @@ pub struct Defaults {
     pub row_weights: Vec<f32>,
     #[serde(default)]
     pub smart_sort: bool,
+    #[serde(default)]
+    pub manual_order: bool,
     #[serde(default = "default_decay_half_life")]
     pub decay_half_life_days: f64,
 }
@@ -108,6 +112,11 @@ pub struct CategoryOverrides {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinRule {
+    #[serde(default)]
+    pub title_exact: Option<String>,
+    /// Session binding survives changing terminal titles; never persisted.
+    #[serde(skip)]
+    pub bound_hwnd: Option<isize>,
     #[serde(default)]
     pub process: Option<String>,
     #[serde(default)]
@@ -156,20 +165,8 @@ impl Default for Defaults {
             col_weights: Vec::new(),
             row_weights: Vec::new(),
             smart_sort: false,
+            manual_order: false,
             decay_half_life_days: default_decay_half_life(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            defaults: Defaults::default(),
-            saved_theme: Vec::new(),
-            layout: Vec::new(),
-            categories: CategoryOverrides::default(),
-            pin: Vec::new(),
-            saved_grid: Vec::new(),
         }
     }
 }
@@ -181,6 +178,9 @@ impl LayoutDef {
         }
         if let Some(style) = &self.style {
             let count = self.count.unwrap_or(2);
+            if !(1..=8).contains(&count) {
+                return None;
+            }
             match style.as_str() {
                 "columns" => return Some(LayoutPreset::Columns(count)),
                 "rows" => return Some(LayoutPreset::Rows(count)),
@@ -203,19 +203,20 @@ impl CategoryOverrides {
 }
 
 impl PinRule {
-    /// Check if a window matches this pin rule.
+    /// Every supplied condition must match. One rule reserves one window.
     pub fn matches(&self, process_name: &str, title: &str) -> bool {
-        if let Some(proc) = &self.process {
-            if process_name.to_lowercase() == proc.to_lowercase() {
-                return true;
-            }
-        }
-        if let Some(substr) = &self.title_contains {
-            if title.to_lowercase().contains(&substr.to_lowercase()) {
-                return true;
-            }
-        }
-        false
+        let present =
+            self.process.is_some() || self.title_exact.is_some() || self.title_contains.is_some();
+        present
+            && self
+                .process
+                .as_ref()
+                .is_none_or(|p| process_name.eq_ignore_ascii_case(p))
+            && self.title_exact.as_ref().is_none_or(|t| title == t)
+            && self
+                .title_contains
+                .as_ref()
+                .is_none_or(|t| !t.is_empty() && title.to_lowercase().contains(&t.to_lowercase()))
     }
 }
 
@@ -255,7 +256,7 @@ pub fn save(config: &Config) {
         }
         match toml::to_string_pretty(config) {
             Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
+                if let Err(e) = atomic_write(&path, content.as_bytes()) {
                     log::warn!("Failed to write config: {}", e);
                 } else {
                     log::info!("Saved config to {}", path.display());
@@ -273,4 +274,15 @@ fn config_path() -> Option<PathBuf> {
 /// Path to the activity database file.
 pub fn activity_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".powershellmanager").join("activity.toml"))
+}
+
+/// Commit a complete document; a crash cannot leave a half-written TOML file.
+pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(tmp, path)
 }

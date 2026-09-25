@@ -4,9 +4,10 @@ use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, TRUE};
 use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
-    GWL_EXSTYLE, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WS_EX_TOOLWINDOW,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SetForegroundWindow, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    WS_EX_TOOLWINDOW,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -177,7 +178,7 @@ impl TargetFilter {
                 )
             }
             Self::Universal => true, // Accept all — filtering done elsewhere
-            Self::Custom(names) => names.iter().any(|n| lower == *n),
+            Self::Custom(names) => names.contains(&lower),
         }
     }
 }
@@ -194,6 +195,7 @@ const EXCLUDED_CLASSES: &[&str] = &[
 
 /// System processes to exclude in Universal mode.
 const EXCLUDED_PROCESSES: &[&str] = &[
+    "powershellmanager.exe",
     "searchhost.exe",
     "startmenuexperiencehost.exe",
     "shellexperiencehost.exe",
@@ -280,7 +282,7 @@ pub fn find_windows(
         let lower = process_name.to_lowercase();
 
         // Check user-configured exclusions
-        if state.extra_exclude.iter().any(|ex| lower == *ex) {
+        if state.extra_exclude.contains(&lower) {
             return TRUE;
         }
 
@@ -323,7 +325,8 @@ pub fn find_windows(
         }
 
         // Get window title
-        let mut buf = [0u16; 256];
+        let length = GetWindowTextLengthW(hwnd).clamp(0, 8192) as usize;
+        let mut buf = vec![0u16; length + 1];
         let len = GetWindowTextW(hwnd, &mut buf);
         let title = if len > 0 {
             String::from_utf16_lossy(&buf[..len as usize])
