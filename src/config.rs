@@ -16,7 +16,15 @@ pub struct SavedGrid {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedTheme {
+    pub name: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub saved_theme: Vec<NamedTheme>,
     #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
@@ -39,6 +47,10 @@ pub struct Defaults {
     pub gap: i32,
     #[serde(default)]
     pub theme: usize,
+    #[serde(default)]
+    pub theme_code: Option<String>,
+    #[serde(default = "default_scale")]
+    pub ui_scale: f32,
     #[serde(default = "default_true")]
     pub settings_open: bool,
     #[serde(default = "default_true")]
@@ -51,6 +63,8 @@ pub struct Defaults {
     pub custom_rows: u32,
     #[serde(default)]
     pub selected_preset: usize,
+    #[serde(default)]
+    pub disabled_cells: Vec<usize>,
     #[serde(default)]
     pub col_weights: Vec<f32>,
     #[serde(default)]
@@ -101,6 +115,9 @@ pub struct PinRule {
     pub slot: usize,
 }
 
+fn default_scale() -> f32 {
+    1.0
+}
 fn default_target() -> String {
     "all".into()
 }
@@ -127,12 +144,15 @@ impl Default for Defaults {
             monitor: default_monitor(),
             gap: default_gap(),
             theme: 0,
+            theme_code: None,
+            ui_scale: 1.0,
             settings_open: true,
             about_open: true,
             use_custom: false,
             custom_cols: 2,
             custom_rows: 2,
             selected_preset: 0,
+            disabled_cells: Vec::new(),
             col_weights: Vec::new(),
             row_weights: Vec::new(),
             smart_sort: false,
@@ -145,6 +165,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             defaults: Defaults::default(),
+            saved_theme: Vec::new(),
             layout: Vec::new(),
             categories: CategoryOverrides::default(),
             pin: Vec::new(),

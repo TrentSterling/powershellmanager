@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::layout::{LayoutPreset, builtin_presets};
+use crate::layout::{builtin_presets, LayoutPreset};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
@@ -61,7 +61,10 @@ pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
             let id = item.id().clone();
             let _ = layouts_submenu.append(&item);
             let weights = Some((sg.col_weights.clone(), sg.row_weights.clone()));
-            let preset = LayoutPreset::Grid { cols: sg.cols, rows: sg.rows };
+            let preset = LayoutPreset::Grid {
+                cols: sg.cols,
+                rows: sg.rows,
+            };
             layout_items.push((id, sg.name.clone(), preset, weights));
         }
     }
@@ -86,7 +89,11 @@ pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
 
     Some((
         TrayIcon { _tray: tray },
-        TrayMenuIds { open_id, quit_id, layout_items },
+        TrayMenuIds {
+            open_id,
+            quit_id,
+            layout_items,
+        },
     ))
 }
 

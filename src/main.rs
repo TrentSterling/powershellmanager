@@ -8,7 +8,10 @@ mod gui;
 mod layout;
 mod monitor;
 mod theme;
+mod theme_studio;
 mod tray;
+#[cfg(test)]
+mod ui_tests;
 mod windows;
 
 use clap::Parser;
@@ -20,6 +23,9 @@ struct Cli {
     /// Apply a layout and exit (e.g., "2x3", "columns:4", "left-right")
     #[arg(long)]
     headless: Option<String>,
+    /// Inspect the UI without moving windows, registering hotkeys or saving settings.
+    #[arg(long, conflicts_with = "headless")]
+    preview: bool,
 }
 
 fn main() {
@@ -34,7 +40,7 @@ fn main() {
         return;
     }
 
-    run_gui();
+    run_gui(cli.preview);
 }
 
 fn run_headless(layout_str: &str) {
@@ -44,7 +50,9 @@ fn run_headless(layout_str: &str) {
         Some(p) => p,
         None => {
             eprintln!("Unknown layout: '{}'", layout_str);
-            eprintln!("Examples: 2x3, columns:4, rows:3, left-right, top-bottom, main-side, focus:3");
+            eprintln!(
+                "Examples: 2x3, columns:4, rows:3, left-right, top-bottom, main-side, focus:3"
+            );
             std::process::exit(1);
         }
     };
@@ -92,14 +100,18 @@ fn load_window_icon() -> Option<egui::IconData> {
     })
 }
 
-fn run_gui() {
+fn run_gui(preview: bool) {
     let config = config::load();
 
-    let title = format!("PowerShell Manager v{}", env!("CARGO_PKG_VERSION"));
+    let title = format!(
+        "PowerShell Manager v{}{}",
+        env!("CARGO_PKG_VERSION"),
+        if preview { " (preview)" } else { "" }
+    );
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
-        .with_inner_size([480.0, 600.0])
-        .with_min_inner_size([260.0, 300.0]);
+        .with_inner_size([1080.0, 800.0])
+        .with_min_inner_size([440.0, 480.0]);
 
     if let Some(icon) = load_window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
@@ -113,7 +125,23 @@ fn run_gui() {
     if let Err(e) = eframe::run_native(
         &title,
         options,
-        Box::new(move |cc| Ok(Box::new(app::PsmApp::new(cc, config)))),
+        Box::new(move |cc| {
+            let app = if preview {
+                let mut app = app::PsmApp::preview(config);
+                app.managed_windows = windows::find_windows(
+                    &windows::TargetFilter::from_str(&app.config.defaults.target),
+                    0,
+                    &app.config.categories.excluded_lower(),
+                );
+                app.monitors = monitor::enumerate_monitors();
+                app.show_theme_studio = true;
+                app.status = "Preview mode. Layout actions and saving are disabled.".into();
+                app
+            } else {
+                app::PsmApp::new(cc, config)
+            };
+            Ok(Box::new(app))
+        }),
     ) {
         eprintln!("Failed to start GUI: {}", e);
         std::process::exit(1);

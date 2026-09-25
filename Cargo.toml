@@ -1,6 +1,6 @@
 [package]
 name = "powershellmanager"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "System tray app for arranging PowerShell/Terminal windows into grid layouts"
 
@@ -32,3 +32,7 @@ windows = { version = "0.58", features = [
     "Win32_System_ProcessStatus",
     "Win32_UI_Input_KeyboardAndMouse",
 ]  }
+
+[dev-dependencies]
+egui-wgpu = "0.31"
+pollster = "0.4"

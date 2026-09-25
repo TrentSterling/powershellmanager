@@ -1,11 +1,11 @@
 use crate::activity::ActivityTracker;
 use crate::config::PinRule;
-use crate::layout::{LayoutPreset, compute_weighted_grid};
+use crate::layout::{compute_weighted_grid, LayoutPreset};
 use crate::monitor::{enumerate_monitors, resolve_monitor};
-use crate::windows::{ManagedWindow, TargetFilter, find_windows};
+use crate::windows::{find_windows, ManagedWindow, TargetFilter};
 use std::collections::HashSet;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 #[derive(Debug)]
 pub struct ArrangeResult {
@@ -37,11 +37,12 @@ pub fn arrange_masked(
     }
 
     let monitor = resolve_monitor(&monitors, monitor_spec);
-    let all_slots = if let (Some((col_w, row_w)), LayoutPreset::Grid { cols, rows }) = (weights, preset) {
-        compute_weighted_grid(*cols, *rows, &monitor.work_area, gap, col_w, row_w)
-    } else {
-        preset.compute_slots(&monitor.work_area, gap)
-    };
+    let all_slots =
+        if let (Some((col_w, row_w)), LayoutPreset::Grid { cols, rows }) = (weights, preset) {
+            compute_weighted_grid(*cols, *rows, &monitor.work_area, gap, col_w, row_w)
+        } else {
+            preset.compute_slots(&monitor.work_area, gap)
+        };
 
     // Only use enabled slots
     let slots: Vec<_> = all_slots
@@ -116,7 +117,10 @@ pub fn arrange_masked(
                     SetWindowPos(
                         HWND(win.hwnd as *mut _),
                         None,
-                        slot.x, slot.y, slot.w, slot.h,
+                        slot.x,
+                        slot.y,
+                        slot.w,
+                        slot.h,
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                 };

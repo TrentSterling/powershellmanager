@@ -69,10 +69,7 @@ impl LayoutPreset {
         }
 
         if s.starts_with("focus") {
-            let rest = s
-                .trim_start_matches("focus")
-                .trim_start_matches(':')
-                .trim();
+            let rest = s.trim_start_matches("focus").trim_start_matches(':').trim();
             let n = rest.parse::<u32>().unwrap_or(3);
             return Some(Self::Focus {
                 side_count: n.max(1),
