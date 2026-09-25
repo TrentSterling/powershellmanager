@@ -1,14 +1,12 @@
 use crate::monitor::Rect;
-use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, TRUE};
-use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-};
 use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, TRUE};
+use windows::Win32::System::ProcessStatus::K32GetModuleFileNameExW;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GetWindowLongPtrW,
-    SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SetForegroundWindow, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
     WS_EX_TOOLWINDOW,
 };
 
@@ -29,28 +27,28 @@ impl AppCategory {
     pub fn short_label(&self) -> &'static str {
         match self {
             Self::Terminal => "T",
-            Self::Browser  => "B",
-            Self::Editor   => "E",
-            Self::Chat     => "C",
-            Self::Media    => "M",
-            Self::Game     => "G",
-            Self::DevTool  => "D",
-            Self::System   => "S",
-            Self::Other    => "?",
+            Self::Browser => "B",
+            Self::Editor => "E",
+            Self::Chat => "C",
+            Self::Media => "M",
+            Self::Game => "G",
+            Self::DevTool => "D",
+            Self::System => "S",
+            Self::Other => "?",
         }
     }
 
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Terminal => "Terminal",
-            Self::Browser  => "Browser",
-            Self::Editor   => "Editor",
-            Self::Chat     => "Chat",
-            Self::Media    => "Media",
-            Self::Game     => "Game",
-            Self::DevTool  => "DevTool",
-            Self::System   => "System",
-            Self::Other    => "Other",
+            Self::Browser => "Browser",
+            Self::Editor => "Editor",
+            Self::Chat => "Chat",
+            Self::Media => "Media",
+            Self::Game => "Game",
+            Self::DevTool => "DevTool",
+            Self::System => "System",
+            Self::Other => "Other",
         }
     }
 }
@@ -58,49 +56,51 @@ impl AppCategory {
 pub fn categorize_process(name: &str) -> AppCategory {
     match name.to_lowercase().as_str() {
         // Terminals
-        "powershell.exe" | "pwsh.exe" | "cmd.exe"
-        | "windowsterminal.exe" | "alacritty.exe" | "wezterm-gui.exe"
-        | "hyper.exe" | "mintty.exe" | "conhost.exe"
-        | "conemu64.exe" | "conemu.exe" | "tabby.exe"
-        | "terminus.exe" | "kitty.exe" | "rio.exe"
+        "powershell.exe"
+        | "pwsh.exe"
+        | "cmd.exe"
+        | "windowsterminal.exe"
+        | "alacritty.exe"
+        | "wezterm-gui.exe"
+        | "hyper.exe"
+        | "mintty.exe"
+        | "conhost.exe"
+        | "conemu64.exe"
+        | "conemu.exe"
+        | "tabby.exe"
+        | "terminus.exe"
+        | "kitty.exe"
+        | "rio.exe"
         | "warp.exe" => AppCategory::Terminal,
 
         // Browsers
-        "chrome.exe" | "firefox.exe" | "msedge.exe"
-        | "brave.exe" | "vivaldi.exe" | "opera.exe"
+        "chrome.exe" | "firefox.exe" | "msedge.exe" | "brave.exe" | "vivaldi.exe" | "opera.exe"
         | "arc.exe" | "waterfox.exe" | "librewolf.exe" => AppCategory::Browser,
 
         // Editors / IDEs
-        "code.exe" | "devenv.exe" | "rider64.exe"
-        | "idea64.exe" | "sublime_text.exe" | "notepad++.exe"
-        | "notepad.exe" | "zed.exe" | "cursor.exe"
-        | "windsurf.exe" => AppCategory::Editor,
+        "code.exe" | "devenv.exe" | "rider64.exe" | "idea64.exe" | "sublime_text.exe"
+        | "notepad++.exe" | "notepad.exe" | "zed.exe" | "cursor.exe" | "windsurf.exe" => {
+            AppCategory::Editor
+        }
 
         // Chat / Communication
-        "discord.exe" | "slack.exe" | "teams.exe"
-        | "telegram.exe" | "signal.exe" | "element.exe"
-        | "zoom.exe" => AppCategory::Chat,
+        "discord.exe" | "slack.exe" | "teams.exe" | "telegram.exe" | "signal.exe"
+        | "element.exe" | "zoom.exe" => AppCategory::Chat,
 
         // Media
-        "spotify.exe" | "vlc.exe" | "obs64.exe"
-        | "obs.exe" | "audacity.exe" | "foobar2000.exe"
+        "spotify.exe" | "vlc.exe" | "obs64.exe" | "obs.exe" | "audacity.exe" | "foobar2000.exe"
         | "mpv.exe" => AppCategory::Media,
 
         // Games
-        "steam.exe" | "epicgameslauncher.exe"
-        | "gogalaxy.exe" => AppCategory::Game,
+        "steam.exe" | "epicgameslauncher.exe" | "gogalaxy.exe" => AppCategory::Game,
 
         // Dev Tools
-        "unity.exe" | "unrealengine.exe"
-        | "blender.exe" | "gimp-2.10.exe" | "gimp.exe"
-        | "figma.exe" | "postman.exe"
-        | "gitextensions.exe" | "sourcetree.exe"
-        | "fork.exe" | "filezilla.exe"
-        | "docker.exe" | "winscp.exe" | "putty.exe" => AppCategory::DevTool,
+        "unity.exe" | "unrealengine.exe" | "blender.exe" | "gimp-2.10.exe" | "gimp.exe"
+        | "figma.exe" | "postman.exe" | "gitextensions.exe" | "sourcetree.exe" | "fork.exe"
+        | "filezilla.exe" | "docker.exe" | "winscp.exe" | "putty.exe" => AppCategory::DevTool,
 
         // System
-        "explorer.exe" | "taskmgr.exe" | "mmc.exe"
-        | "regedit.exe" | "control.exe"
+        "explorer.exe" | "taskmgr.exe" | "mmc.exe" | "regedit.exe" | "control.exe"
         | "perfmon.exe" | "resmon.exe" => AppCategory::System,
 
         _ => AppCategory::Other,
@@ -131,7 +131,8 @@ impl TargetFilter {
             "all" | "universal" => Self::Universal,
             _ => {
                 // Could be comma-separated list of process names
-                let names: Vec<String> = s.split(',')
+                let names: Vec<String> = s
+                    .split(',')
                     .map(|n| n.trim().to_lowercase())
                     .filter(|n| !n.is_empty())
                     .collect();
@@ -156,18 +157,28 @@ impl TargetFilter {
         let lower = process_name.to_lowercase();
         match self {
             Self::Terminals => {
-                matches!(lower.as_str(),
-                    "powershell.exe" | "pwsh.exe"
-                    | "windowsterminal.exe" | "cmd.exe"
-                    | "alacritty.exe" | "wezterm-gui.exe"
-                    | "hyper.exe" | "mintty.exe"
-                    | "conhost.exe" | "conemu64.exe" | "conemu.exe"
-                    | "tabby.exe" | "terminus.exe"
-                    | "kitty.exe" | "rio.exe" | "warp.exe"
+                matches!(
+                    lower.as_str(),
+                    "powershell.exe"
+                        | "pwsh.exe"
+                        | "windowsterminal.exe"
+                        | "cmd.exe"
+                        | "alacritty.exe"
+                        | "wezterm-gui.exe"
+                        | "hyper.exe"
+                        | "mintty.exe"
+                        | "conhost.exe"
+                        | "conemu64.exe"
+                        | "conemu.exe"
+                        | "tabby.exe"
+                        | "terminus.exe"
+                        | "kitty.exe"
+                        | "rio.exe"
+                        | "warp.exe"
                 )
             }
             Self::Universal => true, // Accept all — filtering done elsewhere
-            Self::Custom(names) => names.iter().any(|n| lower == *n),
+            Self::Custom(names) => names.contains(&lower),
         }
     }
 }
@@ -184,6 +195,7 @@ const EXCLUDED_CLASSES: &[&str] = &[
 
 /// System processes to exclude in Universal mode.
 const EXCLUDED_PROCESSES: &[&str] = &[
+    "powershellmanager.exe",
     "searchhost.exe",
     "startmenuexperiencehost.exe",
     "shellexperiencehost.exe",
@@ -214,7 +226,11 @@ const EXCLUDED_PROCESSES: &[&str] = &[
     "windowsinternal.composableshell.experiences.textinput.inputapp.exe",
 ];
 
-pub fn find_windows(filter: &TargetFilter, app_hwnd: isize, extra_exclude: &[String]) -> Vec<ManagedWindow> {
+pub fn find_windows(
+    filter: &TargetFilter,
+    app_hwnd: isize,
+    extra_exclude: &[String],
+) -> Vec<ManagedWindow> {
     struct EnumState {
         filter: TargetFilter,
         app_hwnd: isize,
@@ -266,7 +282,7 @@ pub fn find_windows(filter: &TargetFilter, app_hwnd: isize, extra_exclude: &[Str
         let lower = process_name.to_lowercase();
 
         // Check user-configured exclusions
-        if state.extra_exclude.iter().any(|ex| lower == *ex) {
+        if state.extra_exclude.contains(&lower) {
             return TRUE;
         }
 
@@ -309,7 +325,8 @@ pub fn find_windows(filter: &TargetFilter, app_hwnd: isize, extra_exclude: &[Str
         }
 
         // Get window title
-        let mut buf = [0u16; 256];
+        let length = GetWindowTextLengthW(hwnd).clamp(0, 8192) as usize;
+        let mut buf = vec![0u16; length + 1];
         let len = GetWindowTextW(hwnd, &mut buf);
         let title = if len > 0 {
             String::from_utf16_lossy(&buf[..len as usize])
@@ -446,9 +463,6 @@ fn get_process_name(pid: u32) -> Option<String> {
         }
 
         let full_path = String::from_utf16_lossy(&buf[..len as usize]);
-        full_path
-            .rsplit('\\')
-            .next()
-            .map(|s| s.to_string())
+        full_path.rsplit('\\').next().map(|s| s.to_string())
     }
 }

@@ -1,837 +1,805 @@
 use crate::app::{DividerAxis, PsmApp};
-use crate::config;
 use crate::monitor::Rect;
-use crate::theme::{Theme, THEMES};
+use crate::theme::{self, Theme};
 use crate::windows;
+use egui::{RichText, Stroke};
+mod preview;
+use preview::{draw_interactive_preview, PreviewAction};
 
-
-static ICON_PNG: &[u8] = include_bytes!("../assets/tront-icon.png");
-
-fn load_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    let img = image::load_from_memory(ICON_PNG).expect("embedded PNG is valid");
-    let rgba = img.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let pixels = rgba.into_raw();
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-    ctx.load_texture("tront-icon", color_image, egui::TextureOptions::LINEAR)
+fn section(ui: &mut egui::Ui, label: &str, theme: &Theme) {
+    ui.add_space(4.0);
+    ui.label(RichText::new(label).strong().color(theme.accent2));
 }
 
 pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
-    let theme = app.current_theme().clone();
-    let narrow = ctx.screen_rect().width() < 280.0;
-
-    // Load icon texture once, cache in app
-    if app.icon_texture.is_none() {
-        app.icon_texture = Some(load_icon_texture(ctx));
-    }
-
-    egui::CentralPanel::default().show(ctx, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if narrow {
-                ui.label("PowerShell Manager");
-            } else {
-                ui.heading("PowerShell Manager");
-            }
-            ui.separator();
-
-            // Target mode toggle
+    app.install_theme(ctx);
+    theme::paint_background(ctx, app.theme_settings);
+    let t = app.current_theme();
+    let tokens = theme::tokens(app.theme_settings);
+    let compact_header = ctx.screen_rect().width() < 440.0;
+    egui::TopBottomPanel::top("brand")
+        .frame(
+            egui::Frame::NONE
+                .fill(theme::panel_color(app.theme_settings))
+                .inner_margin(16),
+        )
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Mode:");
-                let current = crate::windows::TargetFilter::from_str(&app.config.defaults.target);
-                let mut target_str = app.config.defaults.target.clone();
-
-                let terminals_selected = matches!(current, crate::windows::TargetFilter::Terminals);
-                let universal_selected = matches!(current, crate::windows::TargetFilter::Universal);
-
-                if ui.selectable_label(terminals_selected, "Terminals").clicked() && !terminals_selected {
-                    target_str = "terminals".to_string();
-                }
-                if ui.selectable_label(universal_selected, "Universal").clicked() && !universal_selected {
-                    target_str = "all".to_string();
-                }
-
-                if target_str != app.config.defaults.target {
-                    app.config.defaults.target = target_str;
-                    config::save(&app.config);
-                    app.refresh_windows();
-                }
-
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+                crate::branding::paint(ui, rect, app.theme_settings);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(if compact_header {
+                            "PSM"
+                        } else {
+                            "POWERSHELL MANAGER"
+                        })
+                        .size(20.0)
+                        .strong(),
+                    );
+                    if !compact_header {
+                        ui.label(RichText::new("Your windows. Your grid.").color(t.text_muted));
+                    }
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut smart = app.config.defaults.smart_sort;
-                    if ui.checkbox(&mut smart, "Smart Sort").changed() {
-                        app.config.defaults.smart_sort = smart;
-                        config::save(&app.config);
+                    if ui.button("Theme Studio").clicked() {
+                        app.show_theme_studio = !app.show_theme_studio;
                     }
                 });
             });
-
-            ui.separator();
-
-            // Detected windows
-            ui.horizontal(|ui| {
-                ui.label(format!(
-                    "Managed windows: {}",
-                    app.managed_windows.len()
-                ));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !app.managed_windows.is_empty() {
-                        if ui.small_button(if narrow { "Min" } else { "Minimize All" }).clicked() {
-                            for win in &app.managed_windows {
-                                windows::minimize_window(win.hwnd);
-                            }
-                        }
-                        if ui.small_button(if narrow { "Rst" } else { "Restore All" }).clicked() {
-                            for win in &app.managed_windows {
-                                windows::restore_window(win.hwnd);
-                            }
-                            windows::focus_window(app.app_hwnd);
-                        }
-                    }
-                });
-            });
-
-            let list_height = (ui.available_height() * 0.25).clamp(40.0, 200.0);
-            let narrow_list = narrow;
-            egui::ScrollArea::vertical()
-                .id_salt("windows_list")
-                .max_height(list_height)
-                .show(ui, |ui| {
-                    // Clone to avoid borrow issues with button clicks
-                    let wins: Vec<_> = app.managed_windows.iter().cloned().collect();
-                    let scores = if app.config.defaults.smart_sort {
-                        app.activity.score_windows(&wins)
-                    } else {
-                        vec![0.0; wins.len()]
-                    };
-
-                    for (i, win) in wins.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("Focus").clicked() {
-                                windows::focus_window(win.hwnd);
-                            }
-
-                            // Pin button
-                            let is_pinned = app.config.pin.iter().any(|p| {
-                                p.matches(&win.process_name, &win.title)
-                            });
-                            let pin_label = if is_pinned { "Unpin" } else { "Pin" };
-                            if ui.small_button(pin_label).clicked() {
-                                if is_pinned {
-                                    // Remove matching pin rule
-                                    app.config.pin.retain(|p| {
-                                        !p.matches(&win.process_name, &win.title)
-                                    });
-                                } else {
-                                    // Add pin rule for this process at slot 0 (or next available)
-                                    let next_slot = if app.config.pin.is_empty() {
-                                        0
-                                    } else {
-                                        app.config.pin.iter().map(|p| p.slot).max().unwrap_or(0) + 1
-                                    };
-                                    app.config.pin.push(config::PinRule {
-                                        process: Some(win.process_name.clone()),
-                                        title_contains: None,
-                                        slot: next_slot,
-                                    });
-                                }
-                                config::save(&app.config);
-                            }
-
-                            if win.is_minimized {
-                                ui.colored_label(theme.text_muted, "[min]");
-                            }
-
-                            // Category label
-                            ui.colored_label(
-                                theme.accent2,
-                                format!("[{}]", win.category.short_label()),
-                            );
-
-                            ui.monospace(&win.process_name);
-
-                            // Score (if smart sort enabled, hidden when narrow)
-                            if !narrow_list && app.config.defaults.smart_sort && scores[i] > 0.1 {
-                                ui.colored_label(
-                                    theme.text_muted,
-                                    format!("{:.0}", scores[i]),
-                                );
-                            }
-
-                            ui.label("\u{2014}");
-                            let title = if win.title.len() > 35 {
-                                format!("{}...", &win.title[..32])
-                            } else {
-                                win.title.clone()
-                            };
-                            ui.label(title);
-                        });
-                    }
-                    if app.managed_windows.is_empty() {
-                        ui.colored_label(theme.text_muted, "No windows found.");
-                    }
-                });
-
-            ui.separator();
-
-            // Layout mode toggle
-            let old_use_custom = app.use_custom;
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut app.use_custom, false, "Preset");
-                ui.selectable_value(&mut app.use_custom, true, "Custom Grid");
-            });
-
-            ui.add_space(4.0);
-
-            if app.use_custom {
-                ui.horizontal(|ui| {
-                    ui.label("Columns:");
-                    let old_cols = app.custom_cols;
-                    ui.add(egui::DragValue::new(&mut app.custom_cols).range(1..=8));
-                    ui.label("Rows:");
-                    let old_rows = app.custom_rows;
-                    ui.add(egui::DragValue::new(&mut app.custom_rows).range(1..=8));
-
-                    if app.custom_cols != old_cols || app.custom_rows != old_rows {
-                        app.disabled_cells.clear();
-                        app.col_weights = vec![1.0 / app.custom_cols as f32; app.custom_cols as usize];
-                        app.row_weights = vec![1.0 / app.custom_rows as f32; app.custom_rows as usize];
-                        app.config.defaults.custom_cols = app.custom_cols;
-                        app.config.defaults.custom_rows = app.custom_rows;
-                        app.config.defaults.col_weights = app.col_weights.clone();
-                        app.config.defaults.row_weights = app.row_weights.clone();
-                        config::save(&app.config);
-                    }
-
-                    if !app.weights_are_uniform() {
-                        if ui.small_button("Reset Sizes").clicked() {
-                            app.col_weights = vec![1.0 / app.custom_cols as f32; app.custom_cols as usize];
-                            app.row_weights = vec![1.0 / app.custom_rows as f32; app.custom_rows as usize];
-                            app.config.defaults.col_weights = app.col_weights.clone();
-                            app.config.defaults.row_weights = app.row_weights.clone();
-                            config::save(&app.config);
-                        }
-                    }
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.label("Layout:");
-                    let current_name = app
-                        .presets
-                        .get(app.selected_preset)
-                        .map(|(n, _)| n.as_str())
-                        .unwrap_or("None");
-
-                    let old_preset = app.selected_preset;
-                    egui::ComboBox::from_id_salt("layout_picker")
-                        .selected_text(current_name)
-                        .show_ui(ui, |ui| {
-                            for (i, (name, _)) in app.presets.iter().enumerate() {
-                                ui.selectable_value(&mut app.selected_preset, i, name);
-                            }
-                        });
-
-                    if app.selected_preset != old_preset {
-                        app.disabled_cells.clear();
-                        app.config.defaults.selected_preset = app.selected_preset;
-                        config::save(&app.config);
-                    }
-                });
-            }
-
-            if app.use_custom != old_use_custom {
-                app.config.defaults.use_custom = app.use_custom;
-                config::save(&app.config);
-            }
-
-            ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
+        });
+    egui::TopBottomPanel::bottom("apply-bar")
+        .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(12))
+        .show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let enabled = app
+                    .active_preset()
+                    .slot_count()
+                    .saturating_sub(app.disabled_cells.len());
+                if ui
+                    .add_enabled(
+                        app.actions_available() && enabled > 0 && !app.managed_windows.is_empty(),
+                        egui::Button::new(RichText::new("Apply layout").strong())
+                            .fill(tokens.accent_dim)
+                            .min_size(egui::vec2(140.0, 36.0)),
+                    )
+                    .clicked()
+                {
                     app.apply_current_layout();
                 }
-                if ui.button("Refresh").clicked() {
+                if ui
+                    .add_enabled(app.actions_available(), egui::Button::new("Refresh"))
+                    .clicked()
+                {
                     app.refresh_windows();
                 }
-                if app.use_custom {
-                    if ui.button("Save Grid").clicked() {
-                        app.show_save_dialog = !app.show_save_dialog;
-                        if app.show_save_dialog {
-                            app.save_grid_name.clear();
-                        }
-                    }
-                }
-                let enabled_count =
-                    app.active_preset().slot_count() - app.disabled_cells.len();
-                ui.colored_label(
-                    theme.text_muted,
-                    format!(
-                        "{} enabled / {} total slots",
-                        enabled_count,
-                        app.active_preset().slot_count()
-                    ),
-                );
+                ui.label(format!(
+                    "{} windows / {} enabled slots",
+                    app.managed_windows.len(),
+                    enabled
+                ));
             });
-
-            // Save grid name input dialog
-            if app.show_save_dialog {
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    let resp = ui.text_edit_singleline(&mut app.save_grid_name);
-                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let can_save = !app.save_grid_name.trim().is_empty();
-                    if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() || (enter && can_save) {
-                        let name = app.save_grid_name.trim().to_string();
-                        app.save_current_as_grid(name);
-                        app.show_save_dialog = false;
-                    }
-                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        app.show_save_dialog = false;
-                    }
-                });
-            }
-
-            // Saved grids list
-            if !app.config.saved_grid.is_empty() {
-                ui.add_space(2.0);
-                ui.colored_label(theme.text_muted, "Saved grids:");
-                let grids: Vec<_> = app.config.saved_grid.clone();
-                for sg in &grids {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("Load").clicked() {
-                            app.load_saved_grid(sg);
-                        }
-                        ui.label(&sg.name);
-                        ui.colored_label(
-                            theme.text_muted,
-                            format!("{}x{}", sg.cols, sg.rows),
-                        );
-                        if !sg.disabled_cells.is_empty() {
-                            ui.colored_label(
-                                theme.text_muted,
-                                format!("({} disabled)", sg.disabled_cells.len()),
-                            );
-                        }
-                        if ui.small_button("X").clicked() {
-                            app.delete_saved_grid(&sg.name.clone());
-                        }
+            ui.label(RichText::new(&app.status).small().color(t.text_muted));
+        });
+    let wide = ctx.screen_rect().width() >= 840.0;
+    if wide {
+        egui::SidePanel::left("layout-rail")
+            .exact_width(246.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(theme::panel_color(app.theme_settings))
+                    .inner_margin(14),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("layout-options")
+                    .show(ui, |ui| {
+                        controls(ui, app, &t);
                     });
-                }
-            }
-
-            ui.separator();
-
-            // Interactive layout preview
-            app.ensure_weights();
-            ui.label("Preview (click cells to toggle):");
-            let action = draw_interactive_preview(ui, ctx, app, &theme);
-            match action {
-                PreviewAction::ToggleCell(cell_idx) => {
-                    app.toggle_cell(cell_idx);
-                }
-                PreviewAction::WeightsChanged => {
-                    app.config.defaults.col_weights = app.col_weights.clone();
-                    app.config.defaults.row_weights = app.row_weights.clone();
-                    config::save(&app.config);
-                }
+            });
+    }
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::panel_color(app.theme_settings)).inner_margin(18)).show(ctx, |ui| {
+        egui::ScrollArea::vertical().id_salt("workspace-scroll").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Layout workspace").size(26.0).strong());
+                ui.colored_label(t.accent2, if app.use_custom { "CUSTOM" } else { "PRESET" });
+            });
+            ui.label(RichText::new(if app.use_custom { "Drag dividers to resize. Click a slot to enable or disable it." } else { "Click a slot to enable or disable it. Switch to Custom to drag dividers." }).color(t.text_muted));
+            ui.add_space(5.0);
+            match draw_interactive_preview(ui, ctx, app, &t) {
+                PreviewAction::ToggleCell(index) => app.toggle_cell(index),
+                PreviewAction::WeightsChanged => app.save_layout(),
                 PreviewAction::None => {}
             }
-
-            ui.separator();
-
-            // Activity stats (collapsible)
-            egui::CollapsingHeader::new("Activity")
-                .default_open(false)
-                .show(ui, |ui| {
-                    let top = app.activity.top_apps(5);
-                    if top.is_empty() {
-                        ui.colored_label(theme.text_muted, "No activity data yet. Use apps for a bit.");
-                    } else {
-                        ui.colored_label(theme.text_muted, "Top apps by score:");
-                        for (name, score) in &top {
-                            ui.horizontal(|ui| {
-                                let cat = crate::windows::categorize_process(name);
-                                ui.colored_label(theme.accent2, format!("[{}]", cat.short_label()));
-                                ui.monospace(name);
-                                ui.colored_label(theme.text_muted, format!("  {:.0}", score));
-                            });
-                        }
-                    }
-
-                    ui.add_space(4.0);
-                    let session = app.activity.session_stats();
-                    if !session.is_empty() {
-                        ui.colored_label(theme.text_muted, "This session:");
-                        for (name, act) in session.iter().take(5) {
-                            ui.horizontal(|ui| {
-                                ui.colored_label(theme.accent2, format!("[{}]", act.category.short_label()));
-                                ui.monospace(name);
-                                ui.colored_label(theme.text_muted, format_duration(act.focus_secs));
-                                ui.colored_label(
-                                    theme.text_muted,
-                                    format!("({} switches)", act.switch_count),
-                                );
-                            });
-                        }
-                    }
-                });
-
-            ui.separator();
-
-            // Settings
-            let settings_resp = egui::CollapsingHeader::new("Settings")
-                .default_open(app.config.defaults.settings_open)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Theme:");
-                        let current_theme_name = THEMES[app.theme_index].name;
-                        egui::ComboBox::from_id_salt("theme_picker")
-                            .selected_text(current_theme_name)
-                            .show_ui(ui, |ui| {
-                                for (i, t) in THEMES.iter().enumerate() {
-                                    if ui
-                                        .selectable_value(&mut app.theme_index, i, t.name)
-                                        .changed()
-                                    {
-                                        app.set_theme(i);
-                                    }
-                                }
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Target:");
-                        ui.colored_label(theme.text_muted, &app.config.defaults.target);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Monitor:");
-                        ui.colored_label(theme.text_muted, &app.config.defaults.monitor);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Gap:");
-                        ui.colored_label(
-                            theme.text_muted,
-                            format!("{}px", app.config.defaults.gap),
-                        );
-                    });
-
-                    // Pinned windows
-                    if !app.config.pin.is_empty() {
-                        ui.add_space(4.0);
-                        ui.label("Pinned windows:");
-                        let mut to_remove = Vec::new();
-                        for (i, rule) in app.config.pin.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.colored_label(theme.accent, format!("Slot {}:", rule.slot));
-                                if let Some(proc) = &rule.process {
-                                    ui.monospace(proc);
-                                }
-                                if let Some(title) = &rule.title_contains {
-                                    ui.colored_label(theme.text_muted, format!("\"{}\"", title));
-                                }
-                                if ui.small_button("X").clicked() {
-                                    to_remove.push(i);
-                                }
-                            });
-                        }
-                        if !to_remove.is_empty() {
-                            for i in to_remove.into_iter().rev() {
-                                app.config.pin.remove(i);
-                            }
-                            config::save(&app.config);
-                        }
-                    }
-                });
-            if settings_resp.header_response.clicked() {
-                app.config.defaults.settings_open = !app.config.defaults.settings_open;
-                config::save(&app.config);
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(t.accent2, "Occupied");
+                ui.colored_label(t.accent, "Available");
+                ui.colored_label(t.text_muted, "Disabled");
+                ui.label(RichText::new("Slot preview; windows move only when you apply.").small());
+            });
+            if !wide {
+                egui::CollapsingHeader::new("Layout controls").default_open(true).show(ui, |ui| { controls(ui, app, &t); });
             }
-
-            // About
-            let about_resp = egui::CollapsingHeader::new("About")
-                .default_open(app.config.defaults.about_open)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if let Some(tex) = &app.icon_texture {
-                            ui.image(egui::load::SizedTexture::new(
-                                tex.id(),
-                                egui::vec2(64.0, 64.0),
-                            ));
-                        }
-                        ui.vertical(|ui| {
-                            ui.label(format!(
-                                "PowerShell Manager v{}",
-                                env!("CARGO_PKG_VERSION")
-                            ));
-                            ui.colored_label(theme.text_muted, "by Trent Sterling (Tront)");
-                            ui.add_space(2.0);
-                            ui.hyperlink_to("tront.xyz", "https://tront.xyz");
-                        });
-                    });
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        theme.text_muted,
-                        "Universal window manager with smart activity-based sorting.",
-                    );
-
-                    // Update banner
-                    if let Ok(guard) = app.update_info.lock() {
-                        if let Some(info) = guard.as_ref() {
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.colored_label(
-                                    theme.accent,
-                                    format!("Update available: v{}", info.latest_version),
-                                );
-                                ui.hyperlink_to("Download", &info.download_url);
-                            });
-                        }
-                    }
-                });
-            if about_resp.header_response.clicked() {
-                app.config.defaults.about_open = !app.config.defaults.about_open;
-                config::save(&app.config);
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.selectable_value(&mut app.detail_tab, 0, format!("Windows ({})", app.managed_windows.len()));
+                ui.selectable_value(&mut app.detail_tab, 1, format!("Pins ({})", app.config.pin.len()));
+                ui.selectable_value(&mut app.detail_tab, 2, "Activity");
+                ui.selectable_value(&mut app.detail_tab, 3, "About");
+            });
+            ui.separator();
+            match app.detail_tab {
+                1 => pins(ui, app, &t),
+                2 => activity(ui, app, &t),
+                3 => about(ui, app),
+                _ => inventory(ui, app, &t)
             }
         });
     });
+    crate::theme_studio::show(ctx, app);
 }
 
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{:.0}s", secs)
-    } else if secs < 3600.0 {
-        format!("{:.0}m", secs / 60.0)
-    } else {
-        format!("{:.1}h", secs / 3600.0)
-    }
-}
-
-enum PreviewAction {
-    None,
-    ToggleCell(usize),
-    WeightsChanged,
-}
-
-impl PreviewAction {
-    fn is_none(&self) -> bool {
-        matches!(self, PreviewAction::None)
-    }
-}
-
-/// Draws interactive preview with optional draggable dividers (custom grid mode).
-fn draw_interactive_preview(
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-    app: &mut PsmApp,
-    theme: &Theme,
-) -> PreviewAction {
-    let preset = app.active_preset();
-    let window_count = app.managed_windows.len();
-    let show_dividers = app.use_custom && app.custom_cols > 0 && app.custom_rows > 0;
-    let non_uniform = show_dividers && !app.weights_are_uniform();
-
-    let panel_width = ctx.screen_rect().width();
-    let preview_width = (panel_width - 16.0).max(60.0);
-    let panel_height = ctx.screen_rect().height();
-    let max_preview_h = (panel_height * 0.4).max(40.0);
-    let preview_height = (preview_width * 9.0 / 16.0).min(max_preview_h);
-    let preview_size = egui::vec2(preview_width, preview_height);
-
-    let (response, painter) = ui.allocate_painter(preview_size, egui::Sense::click_and_drag());
-    let rect = response.rect;
-
-    // Background (monitor)
-    painter.rect_filled(rect, 4.0, theme.surface);
-    painter.rect_stroke(
-        rect,
-        4.0,
-        egui::Stroke::new(1.0, theme.border),
-        egui::StrokeKind::Outside,
+fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
+    section(ui, "ARRANGE", t);
+    let old_target = app.config.defaults.target.clone();
+    ui.label(
+        RichText::new(windows::TargetFilter::from_str(&old_target).display_name())
+            .small()
+            .color(t.text_muted),
     );
-
-    let pad = 6.0;
-    let inner_w = preview_size.x - pad * 2.0;
-    let inner_h = preview_size.y - pad * 2.0;
-    let offset = rect.min + egui::vec2(pad, pad);
-
-    // Compute slots using weights for custom grid, or preset for non-custom
-    let area = Rect { x: 0, y: 0, w: 1920, h: 1080 };
-    let gap_virtual = 12;
-
-    let slots = if show_dividers {
-        crate::layout::compute_weighted_grid(
-            app.custom_cols, app.custom_rows, &area, gap_virtual,
-            &app.col_weights, &app.row_weights,
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut app.config.defaults.target, "all".into(), "All windows");
+        ui.selectable_value(
+            &mut app.config.defaults.target,
+            "terminals".into(),
+            "Terminals",
+        );
+    });
+    if old_target != app.config.defaults.target {
+        app.save_config();
+        app.refresh_windows();
+    }
+    if ui
+        .checkbox(&mut app.config.defaults.smart_sort, "Rank by activity")
+        .on_hover_text("Frequently used and recently focused apps get earlier slots.")
+        .changed()
+    {
+        app.config.defaults.manual_order = false;
+        app.refresh_windows();
+        app.save_config();
+    }
+    section(ui, "DISPLAY", t);
+    let old_monitor = app.config.defaults.monitor.clone();
+    egui::ComboBox::from_id_salt("monitor")
+        .selected_text(if old_monitor == "primary" {
+            "Primary display".into()
+        } else {
+            format!("Display {}", old_monitor)
+        })
+        .width(ui.available_width() - 8.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(
+                &mut app.config.defaults.monitor,
+                "primary".into(),
+                "Primary display",
+            );
+            for monitor in &app.monitors {
+                ui.selectable_value(
+                    &mut app.config.defaults.monitor,
+                    monitor.index.to_string(),
+                    format!(
+                        "Display {}: {} x {}{}",
+                        monitor.index,
+                        monitor.work_area.w,
+                        monitor.work_area.h,
+                        if monitor.is_primary { " (primary)" } else { "" }
+                    ),
+                );
+            }
+        });
+    if ui
+        .add(
+            egui::Slider::new(&mut app.config.defaults.gap, 0..=32)
+                .text("Gap")
+                .suffix(" px"),
         )
-    } else {
-        preset.compute_slots(&area, gap_virtual)
-    };
-
-    let scale_x = inner_w / area.w as f32;
-    let scale_y = inner_h / area.h as f32;
-
-    // Divider hit detection and rendering
-    let divider_hit_px = 5.0;
-    let hover_pos = response.hover_pos();
-    let mut hovered_divider: Option<(DividerAxis, usize)> = None;
-
-    // Compute divider positions in screen coords (only for custom grid)
-    let mut col_divider_x = Vec::new();
-    let mut row_divider_y = Vec::new();
-
-    if show_dividers {
-        let cols = app.custom_cols as usize;
-        let rows = app.custom_rows as usize;
-        let usable_w_virtual = area.w - gap_virtual * (cols as i32 - 1);
-        let usable_h_virtual = area.h - gap_virtual * (rows as i32 - 1);
-
-        // Column divider x positions (between columns)
-        let mut cx = 0.0_f32;
-        for c in 0..cols - 1 {
-            let col_w = usable_w_virtual as f32 * app.col_weights[c];
-            cx += col_w;
-            let screen_x = offset.x + (cx + gap_virtual as f32 * c as f32 + gap_virtual as f32 * 0.5) * scale_x;
-            col_divider_x.push(screen_x);
-        }
-
-        // Row divider y positions (between rows)
-        let mut ry = 0.0_f32;
-        for r in 0..rows - 1 {
-            let row_h = usable_h_virtual as f32 * app.row_weights[r];
-            ry += row_h;
-            let screen_y = offset.y + (ry + gap_virtual as f32 * r as f32 + gap_virtual as f32 * 0.5) * scale_y;
-            row_divider_y.push(screen_y);
-        }
-
-        // Check hover on dividers
-        if let Some(hp) = hover_pos {
-            for (i, &dx) in col_divider_x.iter().enumerate() {
-                if (hp.x - dx).abs() < divider_hit_px {
-                    hovered_divider = Some((DividerAxis::Col, i));
-                    break;
-                }
-            }
-            if hovered_divider.is_none() {
-                for (i, &dy) in row_divider_y.iter().enumerate() {
-                    if (hp.y - dy).abs() < divider_hit_px {
-                        hovered_divider = Some((DividerAxis::Row, i));
-                        break;
-                    }
-                }
-            }
-        }
+        .changed()
+        || old_monitor != app.config.defaults.monitor
+    {
+        app.save_config();
     }
-
-    // Drag interaction for dividers
-    let mut action = PreviewAction::None;
-
-    if show_dividers {
-        if response.drag_started() {
-            if let Some(div) = hovered_divider {
-                app.dragging_divider = Some(div);
-            }
-        }
-
-        if response.dragged() {
-            if let Some((axis, idx)) = app.dragging_divider {
-                let delta = response.drag_delta();
-                let min_weight = 0.05;
-
-                match axis {
-                    DividerAxis::Col => {
-                        let total_w = inner_w;
-                        let weight_delta = delta.x / total_w;
-                        let w0 = (app.col_weights[idx] + weight_delta).max(min_weight);
-                        let w1 = (app.col_weights[idx + 1] - weight_delta).max(min_weight);
-                        let sum = w0 + w1;
-                        let old_sum = app.col_weights[idx] + app.col_weights[idx + 1];
-                        app.col_weights[idx] = w0 / sum * old_sum;
-                        app.col_weights[idx + 1] = w1 / sum * old_sum;
-                    }
-                    DividerAxis::Row => {
-                        let total_h = inner_h;
-                        let weight_delta = delta.y / total_h;
-                        let w0 = (app.row_weights[idx] + weight_delta).max(min_weight);
-                        let w1 = (app.row_weights[idx + 1] - weight_delta).max(min_weight);
-                        let sum = w0 + w1;
-                        let old_sum = app.row_weights[idx] + app.row_weights[idx + 1];
-                        app.row_weights[idx] = w0 / sum * old_sum;
-                        app.row_weights[idx + 1] = w1 / sum * old_sum;
-                    }
-                }
-            }
-        }
-
-        if response.drag_stopped() {
-            if app.dragging_divider.is_some() {
+    section(ui, "LAYOUT", t);
+    let old_custom = app.use_custom;
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut app.use_custom, false, "Presets");
+        ui.selectable_value(&mut app.use_custom, true, "Custom");
+    });
+    if old_custom != app.use_custom {
+        app.disabled_cells.clear();
+        app.save_layout();
+    }
+    if app.use_custom {
+        ui.horizontal(|ui| {
+            ui.label("Cols");
+            let a = ui.add(egui::DragValue::new(&mut app.custom_cols).range(1..=8));
+            ui.label("Rows");
+            let b = ui.add(egui::DragValue::new(&mut app.custom_rows).range(1..=8));
+            if a.changed() || b.changed() {
+                app.ensure_weights();
+                app.disabled_cells.clear();
                 app.dragging_divider = None;
-                // Normalize weights
-                let col_sum: f32 = app.col_weights.iter().sum();
-                if col_sum > 0.0 {
-                    for w in &mut app.col_weights { *w /= col_sum; }
-                }
-                let row_sum: f32 = app.row_weights.iter().sum();
-                if row_sum > 0.0 {
-                    for w in &mut app.row_weights { *w /= row_sum; }
-                }
-                action = PreviewAction::WeightsChanged;
+                app.save_layout();
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.small_button("Equalize").clicked() {
+                app.col_weights.clear();
+                app.row_weights.clear();
+                app.ensure_weights();
+                app.save_layout();
+            }
+            if ui.small_button("Enable all").clicked() {
+                app.disabled_cells.clear();
+                app.save_layout();
+            }
+        });
+        ui.add_space(4.0);
+        if ui.button("Save this grid").clicked() {
+            app.show_save_dialog = !app.show_save_dialog;
+        }
+        if app.show_save_dialog {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.save_grid_name)
+                    .hint_text("Name this layout")
+                    .desired_width(ui.available_width()),
+            );
+            if ui
+                .add_enabled(
+                    !app.save_grid_name.trim().is_empty(),
+                    egui::Button::new("Save layout"),
+                )
+                .clicked()
+            {
+                app.save_current_as_grid(app.save_grid_name.trim().to_string());
+                app.show_save_dialog = false;
             }
         }
-    }
-
-    // Set cursor based on hover/drag state
-    if app.dragging_divider.is_some() || hovered_divider.is_some() {
-        let axis = app.dragging_divider.map(|(a, _)| a)
-            .or(hovered_divider.map(|(a, _)| a));
-        if let Some(a) = axis {
-            ui.ctx().set_cursor_icon(match a {
-                DividerAxis::Col => egui::CursorIcon::ResizeHorizontal,
-                DividerAxis::Row => egui::CursorIcon::ResizeVertical,
+    } else {
+        let selected = app
+            .presets
+            .get(app.selected_preset)
+            .map(|p| p.0.as_str())
+            .unwrap_or("2x2");
+        let old = app.selected_preset;
+        egui::ComboBox::from_id_salt("all-presets")
+            .selected_text(selected)
+            .width(ui.available_width() - 8.0)
+            .show_ui(ui, |ui| {
+                for (i, (name, _)) in app.presets.iter().enumerate() {
+                    ui.selectable_value(&mut app.selected_preset, i, name);
+                }
+            });
+        if old != app.selected_preset {
+            select_preset(app, app.selected_preset);
+        }
+        ui.add_space(2.0);
+        let choices = [
+            "2x2",
+            "3x2",
+            "left-right",
+            "main-side",
+            "focus:3",
+            "columns:3",
+        ];
+        for pair in choices.chunks(2) {
+            ui.horizontal(|ui| {
+                for name in pair {
+                    if let Some(preset) = crate::layout::LayoutPreset::parse(name) {
+                        let selected = preset == app.active_preset();
+                        if preset_button(ui, &preset, name, selected, t) {
+                            if let Some(i) = app.presets.iter().position(|(_, p)| *p == preset) {
+                                select_preset(app, i);
+                            }
+                        }
+                    }
+                }
             });
         }
     }
-
-    // Draw cells
-    let mut enabled_idx = 0;
-    let mut clicked_cell = None;
-    let click_pos = if response.clicked() && app.dragging_divider.is_none() {
-        response.interact_pointer_pos()
-    } else {
-        None
-    };
-
-    for (i, slot) in slots.iter().enumerate() {
-        let slot_rect = egui::Rect::from_min_size(
-            offset + egui::vec2(slot.x as f32 * scale_x, slot.y as f32 * scale_y),
-            egui::vec2(slot.w as f32 * scale_x, slot.h as f32 * scale_y),
-        );
-
-        let is_disabled = app.disabled_cells.contains(&i);
-        let is_hovered = hover_pos.map_or(false, |p| slot_rect.contains(p))
-            && hovered_divider.is_none()
-            && app.dragging_divider.is_none();
-
-        if let Some(pos) = click_pos {
-            if slot_rect.contains(pos) {
-                clicked_cell = Some(i);
-            }
-        }
-
-        let has_window = if is_disabled {
-            false
-        } else {
-            let has = enabled_idx < window_count;
-            enabled_idx += 1;
-            has
-        };
-
-        let color = if is_disabled {
-            theme.cell_disabled
-        } else if is_hovered {
-            theme.cell_hover
-        } else if has_window {
-            theme.cell_occupied
-        } else {
-            theme.cell_enabled
-        };
-
-        painter.rect_filled(slot_rect, 3.0, color);
-        painter.rect_stroke(
-            slot_rect,
-            3.0,
-            egui::Stroke::new(
-                1.0,
-                if is_disabled { theme.border } else { theme.accent.linear_multiply(0.5) },
-            ),
-            egui::StrokeKind::Outside,
-        );
-
-        let cell_too_small = slot_rect.width() < 20.0 || slot_rect.height() < 20.0;
-        if !cell_too_small {
-            if is_disabled {
-                painter.text(
-                    slot_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "X",
-                    egui::FontId::proportional(16.0),
-                    theme.text_muted,
-                );
-            } else {
-                let label = format!("{}", i + 1);
-                if non_uniform && slot_rect.width() > 30.0 && slot_rect.height() > 30.0 {
-                    // Show cell number above center and percentage below
-                    let cols = app.custom_cols as usize;
-                    let row = i / cols;
-                    let col = i % cols;
-                    let w_pct = (app.col_weights[col] * 100.0).round() as u32;
-                    let h_pct = (app.row_weights[row] * 100.0).round() as u32;
-                    let pct_label = format!("{}%x{}%", w_pct, h_pct);
-
-                    painter.text(
-                        slot_rect.center() - egui::vec2(0.0, 7.0),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        egui::FontId::proportional(14.0),
-                        theme.text,
-                    );
-                    painter.text(
-                        slot_rect.center() + egui::vec2(0.0, 7.0),
-                        egui::Align2::CENTER_CENTER,
-                        pct_label,
-                        egui::FontId::proportional(9.0),
-                        theme.text_muted,
-                    );
-                } else {
-                    painter.text(
-                        slot_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        egui::FontId::proportional(14.0),
-                        theme.text,
-                    );
+    if !app.config.saved_grid.is_empty() {
+        section(ui, "SAVED GRIDS", t);
+        for grid in app.config.saved_grid.clone() {
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(&grid.name).wrap()).clicked() {
+                    app.load_saved_grid(&grid);
                 }
+                if ui
+                    .small_button("x")
+                    .on_hover_text("Delete saved grid")
+                    .clicked()
+                {
+                    app.delete_saved_grid(&grid.name);
+                }
+            });
+        }
+    }
+}
+
+fn select_preset(app: &mut PsmApp, index: usize) {
+    app.selected_preset = index;
+    let name = app.presets[index].0.clone();
+    if let Some(grid) = app
+        .config
+        .saved_grid
+        .iter()
+        .find(|g| g.name == name)
+        .cloned()
+    {
+        app.load_saved_grid(&grid);
+    } else {
+        app.disabled_cells.clear();
+        app.save_layout();
+    }
+}
+
+fn preset_button(
+    ui: &mut egui::Ui,
+    preset: &crate::layout::LayoutPreset,
+    name: &str,
+    selected: bool,
+    t: &Theme,
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.spacing().slider_width.clamp(84.0, 102.0), 69.0),
+        egui::Sense::click(),
+    );
+    ui.painter().rect_filled(
+        rect,
+        6.0,
+        if selected || response.hovered() {
+            t.cell_hover
+        } else {
+            t.surface
+        },
+    );
+    ui.painter().rect_stroke(
+        rect,
+        6.0,
+        Stroke::new(1.0, if selected { t.accent } else { t.border }),
+        egui::StrokeKind::Inside,
+    );
+    let area = Rect {
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 52,
+    };
+    for slot in preset.compute_slots(&area, 4) {
+        let r = egui::Rect::from_min_size(
+            rect.min + egui::vec2(8.0 + slot.x as f32 * 0.82, 7.0 + slot.y as f32 * 0.67),
+            egui::vec2(slot.w as f32 * 0.82, slot.h as f32 * 0.67),
+        );
+        ui.painter().rect_filled(r, 2.0, t.cell_occupied);
+        ui.painter().rect_stroke(
+            r,
+            2.0,
+            Stroke::new(1.0, t.accent2),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().text(
+        rect.center_bottom() - egui::vec2(0.0, 11.0),
+        egui::Align2::CENTER_CENTER,
+        name,
+        egui::FontId::proportional(12.0),
+        t.text,
+    );
+    response.on_hover_text(preset.display_name()).clicked()
+}
+
+/// Child content must not advance the parent's cursor after a fixed row allocation.
+fn fixed_region(ui: &mut egui::Ui, builder: egui::UiBuilder, contents: impl FnOnce(&mut egui::Ui)) {
+    let mut child = ui.new_child(builder);
+    contents(&mut child);
+}
+
+fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
+    ui.horizontal_wrapped(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.window_query)
+                .hint_text("Search windows or apps")
+                .desired_width(230.0),
+        );
+        if ui
+            .add_enabled(app.actions_available(), egui::Button::new("Minimize all"))
+            .clicked()
+        {
+            if !app.native_enabled {
+                return;
+            }
+            for win in &app.managed_windows {
+                windows::minimize_window(win.hwnd);
+            }
+        }
+        if ui
+            .add_enabled(app.actions_available(), egui::Button::new("Restore all"))
+            .clicked()
+        {
+            if !app.native_enabled {
+                return;
+            }
+            for win in &app.managed_windows {
+                windows::restore_window(win.hwnd);
+            }
+            windows::focus_window(app.app_hwnd);
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(if app.config.defaults.manual_order {
+            "Manual order. Drag handles to choose slots."
+        } else if app.config.defaults.smart_sort {
+            "Activity order. Drag a handle to take control."
+        } else {
+            "Desktop order. Drag a handle to choose slots."
+        });
+        if app.config.defaults.manual_order && ui.small_button("Reset order").clicked() {
+            app.config.defaults.manual_order = false;
+            app.save_config();
+            app.refresh_windows();
+        }
+    });
+    let query = app.window_query.to_lowercase();
+    let wins = app.managed_windows.clone();
+    let assignment = app.assignment();
+    let tokens = theme::tokens(app.theme_settings);
+    let mut shown = 0;
+    let mut reorder = None;
+    for (i, win) in wins.iter().enumerate() {
+        if !query.is_empty()
+            && !win.title.to_lowercase().contains(&query)
+            && !win.process_name.to_lowercase().contains(&query)
+        {
+            continue;
+        }
+        let compact = ui.available_width() < 350.0;
+        let height = if compact { 86.0 } else { 58.0 };
+        let (rect, row) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), height),
+            egui::Sense::hover(),
+        );
+        let base = tokens.panel;
+        let tint = app.theme_settings.zebra_strength;
+        let fill = if shown % 2 == 1 {
+            tokens.surface(theme::mix(
+                base,
+                tokens.secondary,
+                if tint > 0.0 { 0.12 + tint * 0.45 } else { 0.0 },
+            ))
+        } else {
+            base
+        };
+        let fill = if row.hovered() {
+            tokens.surface(theme::mix(
+                fill,
+                tokens.accent,
+                app.theme_settings.hover_strength,
+            ))
+        } else {
+            fill
+        };
+        ui.painter().rect_filled(rect, 4.0, fill);
+        ui.painter().line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(0.5, tokens.border),
+        );
+        let handle_rect = egui::Rect::from_min_size(
+            rect.min + egui::vec2(4.0, 5.0),
+            egui::vec2(20.0, height - 10.0),
+        );
+        let handle = ui.interact(
+            handle_rect,
+            ui.id().with(("window-handle", win.hwnd)),
+            egui::Sense::drag(),
+        );
+        for col in 0..2 {
+            for dot in 0..3 {
+                ui.painter().circle_filled(
+                    handle_rect.center()
+                        + egui::vec2(col as f32 * 5.0 - 2.5, dot as f32 * 5.0 - 5.0),
+                    1.3,
+                    if handle.hovered() {
+                        t.accent2
+                    } else {
+                        t.text_muted
+                    },
+                );
+            }
+        }
+        handle.dnd_set_drag_payload(win.hwnd);
+        handle
+            .clone()
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text("Drag to reorder. Apply uses your manual order.");
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new(("test-window-handle", win.hwnd)), handle_rect);
+            d.insert_temp(egui::Id::new(("test-window-row", win.hwnd)), rect);
+        });
+        let order_label = assignment
+            .slots
+            .iter()
+            .position(|w| *w == Some(i))
+            .map(|s| (s + 1).to_string())
+            .unwrap_or_else(|| "-".into());
+        ui.painter().text(
+            egui::pos2(rect.left() + 36.0, rect.top() + 22.0),
+            egui::Align2::CENTER_CENTER,
+            order_label,
+            egui::FontId::monospace(12.0),
+            t.accent2,
+        );
+        let name_right = if compact {
+            rect.right() - 8.0
+        } else {
+            rect.right() - 126.0
+        };
+        let name_rect = egui::Rect::from_min_max(
+            rect.min + egui::vec2(54.0, 7.0),
+            egui::pos2(name_right, rect.top() + 50.0),
+        );
+        fixed_region(
+            ui,
+            egui::UiBuilder::new()
+                .max_rect(name_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(egui::Label::new(RichText::new(&win.title).strong()).truncate())
+                    .on_hover_text(&win.title);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{} / {}",
+                            win.process_name,
+                            win.category.short_label()
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(format!("{} x {}", win.rect.w, win.rect.h));
+            },
+        );
+        let actions = egui::Rect::from_min_size(
+            if compact {
+                egui::pos2(rect.right() - 122.0, rect.bottom() - 30.0)
+            } else {
+                egui::pos2(rect.right() - 122.0, rect.top() + 7.0)
+            },
+            egui::vec2(114.0, 26.0),
+        );
+        fixed_region(
+            ui,
+            egui::UiBuilder::new()
+                .max_rect(actions)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if ui
+                    .add_enabled(
+                        app.actions_available(),
+                        egui::Button::new("Focus").min_size(egui::vec2(52.0, 24.0)),
+                    )
+                    .clicked()
+                    && app.native_enabled
+                {
+                    windows::focus_window(win.hwnd);
+                }
+                let pinned = assignment.rule_windows.contains(&Some(i));
+                let pin_response = ui.add_sized(
+                    [52.0, 24.0],
+                    egui::Button::new(if pinned { "Unpin" } else { "Pin" }),
+                );
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(
+                        egui::Id::new(("test-window-pin", win.hwnd)),
+                        pin_response.rect,
+                    )
+                });
+                if pin_response.clicked() {
+                    app.toggle_pin(win.hwnd);
+                }
+            },
+        );
+        let state_pos = if compact {
+            egui::pos2(rect.left() + 54.0, rect.bottom() - 17.0)
+        } else {
+            egui::pos2(rect.right() - 122.0, rect.top() + 44.0)
+        };
+        ui.painter().text(
+            state_pos,
+            egui::Align2::LEFT_CENTER,
+            if win.is_minimized {
+                "Minimized"
+            } else {
+                "Ready"
+            },
+            egui::FontId::proportional(11.0),
+            t.text_muted,
+        );
+        if let Some(source) = row.dnd_hover_payload::<isize>() {
+            if *source != win.hwnd {
+                let after = ui.input(|i| {
+                    i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| p.y > rect.center().y)
+                });
+                let y = if after { rect.bottom() } else { rect.top() };
+                ui.painter().line_segment(
+                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                    Stroke::new(3.0, t.accent2),
+                );
+            }
+        }
+        if let Some(source) = row.dnd_release_payload::<isize>() {
+            let after = ui.input(|i| {
+                i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| p.y > rect.center().y)
+            });
+            reorder = Some((*source, win.hwnd, after));
+        }
+        shown += 1;
+    }
+    if let Some((source, target, after)) = reorder {
+        app.reorder_window(source, target, after);
+    }
+    if shown == 0 {
+        ui.label(if query.is_empty() {
+            "No matching windows found. Try All windows or Refresh."
+        } else {
+            "No windows match your search."
+        });
+    }
+    if egui::DragAndDrop::payload::<isize>(ui.ctx()).is_some() {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+            let clip = ui.clip_rect();
+            let delta = if pos.y < clip.top() + 28.0 {
+                8.0
+            } else if pos.y > clip.bottom() - 28.0 {
+                -8.0
+            } else {
+                0.0
+            };
+            if delta != 0.0 {
+                ui.scroll_with_delta(egui::vec2(0.0, delta));
+                ui.ctx().request_repaint();
             }
         }
     }
+}
 
-    // Draw divider lines on top
-    if show_dividers {
-        let top = offset.y;
-        let bottom = offset.y + inner_h;
-        let left = offset.x;
-        let right = offset.x + inner_w;
+fn pins(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
+    ui.label("Pin an app from the Windows tab, then choose its slot here.");
+    let count = app.active_preset().slot_count();
+    ui.label("Each pin reserves one window. Slot numbers match the grid; other windows fill the remaining cells.");
+    for warning in app.assignment().warnings {
+        ui.colored_label(t.accent2, warning);
+    }
+    let mut remove = None;
+    let mut changed = false;
+    for (i, rule) in app.config.pin.iter_mut().enumerate() {
+        ui.push_id(i, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    rule.title_exact
+                        .as_deref()
+                        .or(rule.title_contains.as_deref())
+                        .or(rule.process.as_deref())
+                        .unwrap_or("Unnamed rule"),
+                );
+                let mut slot = rule.slot.saturating_add(1);
+                ui.label("Slot");
+                if ui
+                    .add(egui::DragValue::new(&mut slot).range(1..=count.max(1)))
+                    .changed()
+                {
+                    rule.slot = slot - 1;
+                    changed = true;
+                }
+                if rule.slot >= count || app.disabled_cells.contains(&rule.slot) {
+                    ui.colored_label(t.accent2, "Slot unavailable in this layout");
+                }
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(i);
+                }
+            });
+        });
+    }
+    if let Some(i) = remove {
+        app.config.pin.remove(i);
+        changed = true;
+    }
+    if changed {
+        app.save_config();
+    }
+}
 
-        for (i, &dx) in col_divider_x.iter().enumerate() {
-            let is_active = app.dragging_divider == Some((DividerAxis::Col, i))
-                || hovered_divider == Some((DividerAxis::Col, i));
-            let stroke_w = if is_active { 2.5 } else { 1.0 };
-            let color = if is_active {
-                theme.accent
-            } else {
-                theme.accent.linear_multiply(0.4)
-            };
-            painter.line_segment(
-                [egui::pos2(dx, top), egui::pos2(dx, bottom)],
-                egui::Stroke::new(stroke_w, color),
+fn activity(ui: &mut egui::Ui, app: &PsmApp, t: &Theme) {
+    ui.label("Activity ranking uses focus time, app switches and recency. Stored locally.");
+    let Ok(tracker) = app.activity.lock() else {
+        return;
+    };
+    let top = tracker.top_apps(10);
+    if top.is_empty() {
+        ui.colored_label(t.text_muted, "Activity appears as you use your apps.");
+    }
+    for (name, score) in top {
+        ui.horizontal(|ui| {
+            ui.label(name);
+            ui.monospace(format!("{score:.0} points"));
+        });
+    }
+    for (name, act) in tracker.session_stats().iter().take(5) {
+        ui.label(format!(
+            "{}: {:.0} min focused / {} switches / {}",
+            name,
+            act.focus_secs / 60.0,
+            act.switch_count,
+            act.category.short_label()
+        ));
+    }
+}
+
+fn about(ui: &mut egui::Ui, app: &PsmApp) {
+    ui.heading(format!("PowerShellManager {}", env!("CARGO_PKG_VERSION")));
+    let key = egui::Id::new("trent-about-photo");
+    let texture = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<egui::TextureHandle>(key))
+        .unwrap_or_else(|| {
+            let pixels = image::load_from_memory(include_bytes!("../assets/tront-icon.png"))
+                .expect("embedded author portrait")
+                .to_rgba8();
+            let tex = ui.ctx().load_texture(
+                "Trent Sterling",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [pixels.width() as usize, pixels.height() as usize],
+                    pixels.as_raw(),
+                ),
+                Default::default(),
             );
-        }
-
-        for (i, &dy) in row_divider_y.iter().enumerate() {
-            let is_active = app.dragging_divider == Some((DividerAxis::Row, i))
-                || hovered_divider == Some((DividerAxis::Row, i));
-            let stroke_w = if is_active { 2.5 } else { 1.0 };
-            let color = if is_active {
-                theme.accent
-            } else {
-                theme.accent.linear_multiply(0.4)
-            };
-            painter.line_segment(
-                [egui::pos2(left, dy), egui::pos2(right, dy)],
-                egui::Stroke::new(stroke_w, color),
+            ui.ctx().data_mut(|d| d.insert_temp(key, tex.clone()));
+            tex
+        });
+    ui.horizontal(|ui| {
+        ui.image((texture.id(), egui::vec2(64.0, 64.0)));
+        ui.vertical(|ui| {
+            ui.label("Built by Trent Sterling");
+            ui.hyperlink_to("tront.xyz", "https://tront.xyz");
+        });
+    });
+    ui.label("Weighted grids, saved layouts and a workspace that looks like you.");
+    ui.hyperlink_to(
+        "Source & releases",
+        "https://github.com/TrentSterling/powershellmanager",
+    );
+    if let Ok(update) = app.update_info.lock() {
+        if let Some(info) = update.as_ref() {
+            ui.hyperlink_to(
+                format!("Download {}", info.latest_version),
+                &info.download_url,
             );
         }
     }
-
-    if let Some(cell_idx) = clicked_cell {
-        if action.is_none() {
-            return PreviewAction::ToggleCell(cell_idx);
-        }
-    }
-    action
+    egui::CollapsingHeader::new("Font license").show(ui, |ui| {
+        ui.label(theme::typography::LICENSE);
+    });
+    egui::CollapsingHeader::new("Theme engine credits").show(ui, |ui| {
+        ui.label(include_str!("../assets/theme-engine-NOTICE"));
+    });
 }

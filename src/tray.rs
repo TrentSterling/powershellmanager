@@ -1,109 +1,174 @@
-use crate::config::Config;
-use crate::layout::{LayoutPreset, builtin_presets};
+use crate::{
+    config::Config,
+    layout::{builtin_presets, LayoutPreset},
+    theme::ThemeSettings,
+};
+use std::collections::HashSet;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
-/// Holds the tray icon (must stay alive on the main thread — not Send).
 pub struct TrayIcon {
     pub _tray: tray_icon::TrayIcon,
 }
-
-/// Menu IDs extracted from tray setup — Send + Clone, safe to move to a thread.
 pub struct TrayMenuIds {
-    pub open_id: MenuId,
-    pub quit_id: MenuId,
-    pub layout_items: Vec<(MenuId, String, LayoutPreset, Option<(Vec<f32>, Vec<f32>)>)>,
+    open_id: MenuId,
+    quit_id: MenuId,
+    current_id: MenuId,
+    layout_items: Vec<(MenuId, LayoutChoice)>,
 }
-
+#[derive(Debug, Clone)]
+pub enum LayoutChoice {
+    Preset(LayoutPreset),
+    Saved(String),
+}
 #[derive(Debug)]
 pub enum TrayAction {
     None,
     ShowGui,
-    ApplyLayout(String, LayoutPreset, Option<(Vec<f32>, Vec<f32>)>),
+    ApplyCurrent,
+    ApplyLayout(LayoutChoice),
     Quit,
 }
+pub struct LayoutRequest {
+    pub preset: LayoutPreset,
+    pub weights: Option<(Vec<f32>, Vec<f32>)>,
+    pub disabled: HashSet<usize>,
+}
 
-/// Create the tray icon (stays on main thread) and return the menu IDs (move to bg thread).
+/// Resolve at click time, using current settings rather than a startup snapshot.
+pub fn layout_request(config: &Config, action: &TrayAction) -> Option<LayoutRequest> {
+    match action {
+        TrayAction::ApplyLayout(LayoutChoice::Saved(name)) => {
+            let grid = config.saved_grid.iter().find(|g| &g.name == name)?;
+            Some(LayoutRequest {
+                preset: LayoutPreset::Grid {
+                    cols: grid.cols.clamp(1, 8),
+                    rows: grid.rows.clamp(1, 8),
+                },
+                weights: Some((grid.col_weights.clone(), grid.row_weights.clone())),
+                disabled: grid.disabled_cells.iter().copied().collect(),
+            })
+        }
+        TrayAction::ApplyLayout(LayoutChoice::Preset(preset)) => Some(LayoutRequest {
+            preset: preset.clone(),
+            weights: None,
+            disabled: HashSet::new(),
+        }),
+        TrayAction::ApplyCurrent => {
+            let d = &config.defaults;
+            let preset = if d.use_custom {
+                LayoutPreset::Grid {
+                    cols: d.custom_cols.clamp(1, 8),
+                    rows: d.custom_rows.clamp(1, 8),
+                }
+            } else {
+                let mut presets = builtin_presets();
+                presets.extend(
+                    config
+                        .layout
+                        .iter()
+                        .filter_map(|l| l.to_preset().map(|p| (l.name.clone(), p))),
+                );
+                if d.selected_preset >= presets.len() {
+                    if let Some(g) = config.saved_grid.get(d.selected_preset - presets.len()) {
+                        return layout_request(
+                            config,
+                            &TrayAction::ApplyLayout(LayoutChoice::Saved(g.name.clone())),
+                        );
+                    }
+                }
+                presets
+                    .get(d.selected_preset)
+                    .map(|(_, p)| p.clone())
+                    .unwrap_or(LayoutPreset::Grid { cols: 2, rows: 2 })
+            };
+            Some(LayoutRequest {
+                preset,
+                weights: if d.use_custom {
+                    Some((d.col_weights.clone(), d.row_weights.clone()))
+                } else {
+                    None
+                },
+                disabled: d.disabled_cells.iter().copied().collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
 pub fn create_tray(config: &Config) -> Option<(TrayIcon, TrayMenuIds)> {
     let menu = Menu::new();
-
-    let open_item = MenuItem::new("Open Window", true, None);
-    let open_id = open_item.id().clone();
-    let _ = menu.append(&open_item);
-
-    let sep_top = tray_icon::menu::PredefinedMenuItem::separator();
-    let _ = menu.append(&sep_top);
-
-    let layouts_submenu = Submenu::new("Layouts", true);
-    let mut layout_items = Vec::new();
-
-    for (name, preset) in builtin_presets() {
-        let item = MenuItem::new(&name, true, None);
-        let id = item.id().clone();
-        let _ = layouts_submenu.append(&item);
-        layout_items.push((id, name, preset, None));
+    let open = MenuItem::new("Open Window", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let current = MenuItem::new("Apply current layout (Ctrl+Alt+G)", true, None);
+    menu.append_items(&[&open, &current]).ok()?;
+    let layouts = Submenu::new("Layouts", true);
+    let mut items = Vec::new();
+    let mut presets = builtin_presets();
+    presets.extend(
+        config
+            .layout
+            .iter()
+            .filter_map(|l| l.to_preset().map(|p| (l.name.clone(), p))),
+    );
+    for (name, preset) in presets {
+        let item = MenuItem::new(name, true, None);
+        layouts.append(&item).ok()?;
+        items.push((item.id().clone(), LayoutChoice::Preset(preset)));
     }
-
-    for layout_def in &config.layout {
-        if let Some(preset) = layout_def.to_preset() {
-            let item = MenuItem::new(&layout_def.name, true, None);
-            let id = item.id().clone();
-            let _ = layouts_submenu.append(&item);
-            layout_items.push((id, layout_def.name.clone(), preset, None));
-        }
+    for grid in &config.saved_grid {
+        let item = MenuItem::new(
+            format!("{} ({}x{})", grid.name, grid.cols, grid.rows),
+            true,
+            None,
+        );
+        layouts.append(&item).ok()?;
+        items.push((item.id().clone(), LayoutChoice::Saved(grid.name.clone())));
     }
-
-    if !config.saved_grid.is_empty() {
-        let _ = layouts_submenu.append(&tray_icon::menu::PredefinedMenuItem::separator());
-        for sg in &config.saved_grid {
-            let label = format!("{} ({}x{})", sg.name, sg.cols, sg.rows);
-            let item = MenuItem::new(&label, true, None);
-            let id = item.id().clone();
-            let _ = layouts_submenu.append(&item);
-            let weights = Some((sg.col_weights.clone(), sg.row_weights.clone()));
-            let preset = LayoutPreset::Grid { cols: sg.cols, rows: sg.rows };
-            layout_items.push((id, sg.name.clone(), preset, weights));
-        }
-    }
-
-    let _ = menu.append(&layouts_submenu);
-
-    let separator = tray_icon::menu::PredefinedMenuItem::separator();
-    let _ = menu.append(&separator);
-
-    let quit_item = MenuItem::new("Quit", true, None);
-    let quit_id = quit_item.id().clone();
-    let _ = menu.append(&quit_item);
-
-    let icon = create_tray_icon()?;
-
+    menu.append_items(&[&layouts, &quit]).ok()?;
+    let theme = config
+        .defaults
+        .theme_code
+        .as_deref()
+        .and_then(ThemeSettings::decode)
+        .unwrap_or_else(|| {
+            crate::theme::from_legacy(config.defaults.theme.min(crate::theme::THEMES.len() - 1))
+        });
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("PowerShell Manager")
-        .with_icon(icon)
+        .with_icon(tray_icon(theme)?)
         .build()
         .ok()?;
-
     Some((
         TrayIcon { _tray: tray },
-        TrayMenuIds { open_id, quit_id, layout_items },
+        TrayMenuIds {
+            open_id: open.id().clone(),
+            quit_id: quit.id().clone(),
+            current_id: current.id().clone(),
+            layout_items: items,
+        },
     ))
 }
-
+impl TrayIcon {
+    pub fn set_theme(&self, theme: ThemeSettings) {
+        let _ = self._tray.set_icon(tray_icon(theme));
+    }
+}
+fn tray_icon(theme: ThemeSettings) -> Option<Icon> {
+    let icon = crate::branding::icon(theme, 32);
+    Icon::from_rgba(icon.rgba, icon.width, icon.height).ok()
+}
 impl TrayMenuIds {
-    /// Poll tray icon clicks and menu events. Call from a background thread.
     pub fn poll(&self) -> TrayAction {
-        if let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click {
-                button: tray_icon::MouseButton::Left,
-                button_state: tray_icon::MouseButtonState::Up,
-                ..
-            } = event
-            {
-                return TrayAction::ShowGui;
-            }
+        if let Ok(TrayIconEvent::Click {
+            button: tray_icon::MouseButton::Left,
+            button_state: tray_icon::MouseButtonState::Up,
+            ..
+        }) = TrayIconEvent::receiver().try_recv()
+        {
+            return TrayAction::ShowGui;
         }
-
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.open_id {
                 return TrayAction::ShowGui;
@@ -111,23 +176,15 @@ impl TrayMenuIds {
             if event.id == self.quit_id {
                 return TrayAction::Quit;
             }
-            for (id, name, preset, weights) in &self.layout_items {
+            if event.id == self.current_id {
+                return TrayAction::ApplyCurrent;
+            }
+            for (id, choice) in &self.layout_items {
                 if event.id == *id {
-                    return TrayAction::ApplyLayout(name.clone(), preset.clone(), weights.clone());
+                    return TrayAction::ApplyLayout(choice.clone());
                 }
             }
         }
-
         TrayAction::None
     }
-}
-
-fn create_tray_icon() -> Option<Icon> {
-    static ICON_PNG: &[u8] = include_bytes!("../assets/tront-icon.png");
-
-    let img = image::load_from_memory(ICON_PNG).ok()?;
-    let resized = img.resize_exact(32, 32, image::imageops::FilterType::Lanczos3);
-    let rgba = resized.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Icon::from_rgba(rgba.into_raw(), w, h).ok()
 }

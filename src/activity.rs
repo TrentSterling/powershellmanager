@@ -1,4 +1,4 @@
-use crate::windows::{self, AppCategory, ManagedWindow, categorize_process};
+use crate::windows::{self, categorize_process, AppCategory, ManagedWindow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
@@ -46,6 +46,7 @@ pub struct ActivityDb {
 
 /// Main activity tracker — owns the poller thread and accumulates data.
 pub struct ActivityTracker {
+    persist: bool,
     rx: mpsc::Receiver<FocusEvent>,
     session: HashMap<AppId, SessionActivity>,
     db: Arc<Mutex<ActivityDb>>,
@@ -80,6 +81,7 @@ impl ActivityTracker {
             .expect("failed to spawn activity poller thread");
 
         Self {
+            persist: true,
             rx,
             session: HashMap::new(),
             db,
@@ -87,6 +89,21 @@ impl ActivityTracker {
             last_save: Instant::now(),
             last_decay: Instant::now(),
             decay_half_life_days,
+        }
+    }
+
+    /// Isolated preview: no poller, filesystem reads or persistence on drop.
+    pub fn inert() -> Self {
+        let (_, rx) = mpsc::channel();
+        Self {
+            persist: false,
+            rx,
+            session: HashMap::new(),
+            db: Arc::new(Mutex::new(ActivityDb::default())),
+            current_focus: None,
+            last_save: Instant::now(),
+            last_decay: Instant::now(),
+            decay_half_life_days: 7.0,
         }
     }
 
@@ -110,27 +127,28 @@ impl ActivityTracker {
             }
 
             // Start new focus period
-            let entry = self.session.entry(app_id.clone()).or_insert_with(|| {
-                SessionActivity {
+            let entry = self
+                .session
+                .entry(app_id.clone())
+                .or_insert_with(|| SessionActivity {
                     focus_secs: 0.0,
                     switch_count: 0,
                     last_focus: event.timestamp,
                     category: categorize_process(&event.process_name),
-                }
-            });
+                });
             entry.switch_count += 1;
             entry.last_focus = event.timestamp;
 
             // Update persistent DB
             if let Ok(mut db) = self.db.lock() {
-                let record = db.apps.entry(app_id.clone()).or_insert_with(|| {
-                    AppRecord {
-                        total_focus_secs: 0.0,
-                        total_switches: 0,
-                        last_focus_ts: event.timestamp,
-                        category: categorize_process(&event.process_name).display_name().to_string(),
-                        last_title: String::new(),
-                    }
+                let record = db.apps.entry(app_id.clone()).or_insert_with(|| AppRecord {
+                    total_focus_secs: 0.0,
+                    total_switches: 0,
+                    last_focus_ts: event.timestamp,
+                    category: categorize_process(&event.process_name)
+                        .display_name()
+                        .to_string(),
+                    last_title: String::new(),
                 });
                 record.total_switches += 1;
                 record.last_focus_ts = event.timestamp;
@@ -201,6 +219,9 @@ impl ActivityTracker {
 
     /// Save activity DB to disk.
     pub fn save(&self) {
+        if !self.persist {
+            return;
+        }
         if let Some(path) = crate::config::activity_path() {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -208,7 +229,7 @@ impl ActivityTracker {
             if let Ok(db) = self.db.lock() {
                 match toml::to_string_pretty(&*db) {
                     Ok(content) => {
-                        if let Err(e) = std::fs::write(&path, &content) {
+                        if let Err(e) = crate::config::atomic_write(&path, content.as_bytes()) {
                             log::warn!("Failed to save activity: {}", e);
                         }
                     }
@@ -223,41 +244,63 @@ impl ActivityTracker {
         let now = now_ts();
         let db = self.db.lock().ok();
 
-        windows.iter().map(|win| {
-            let app_id = win.process_name.to_lowercase();
+        windows
+            .iter()
+            .map(|win| {
+                let app_id = win.process_name.to_lowercase();
 
-            // Session data
-            let session_focus = self.session.get(&app_id).map(|s| s.focus_secs).unwrap_or(0.0);
-            let session_switches = self.session.get(&app_id).map(|s| s.switch_count).unwrap_or(0);
+                // Session data
+                let session_focus = self
+                    .session
+                    .get(&app_id)
+                    .map(|s| s.focus_secs)
+                    .unwrap_or(0.0);
+                let session_switches = self
+                    .session
+                    .get(&app_id)
+                    .map(|s| s.switch_count)
+                    .unwrap_or(0);
 
-            // Persistent data
-            let (db_focus, db_switches, last_focus) = db.as_ref()
-                .and_then(|db| db.apps.get(&app_id))
-                .map(|r| (r.total_focus_secs, r.total_switches, r.last_focus_ts))
-                .unwrap_or((0.0, 0, 0.0));
+                // Persistent data
+                let (db_focus, db_switches, last_focus) = db
+                    .as_ref()
+                    .and_then(|db| db.apps.get(&app_id))
+                    .map(|r| (r.total_focus_secs, r.total_switches, r.last_focus_ts))
+                    .unwrap_or((0.0, 0, 0.0));
 
-            let total_focus = session_focus + db_focus;
-            let total_switches = session_switches as u64 + db_switches;
+                let total_focus = session_focus + db_focus;
+                let total_switches = session_switches as u64 + db_switches;
 
-            // Scoring formula:
-            // - ln(focus_secs).max(0) * 10  — log-scale focus prevents browser domination
-            // - sqrt(switches) * 5           — frequent-switch apps (chat, terminal) get boost
-            // - recency_factor * 50          — 4-hour half-life recency (strongest signal)
-            let focus_score = (total_focus.max(1.0).ln()).max(0.0) * 10.0;
-            let switch_score = (total_switches as f64).sqrt() * 5.0;
-            let recency_hours = if last_focus > 0.0 { (now - last_focus) / 3600.0 } else { 999.0 };
-            let recency_score = 0.5_f64.powf(recency_hours / 4.0) * 50.0;
+                // Scoring formula:
+                // - ln(focus_secs).max(0) * 10  — log-scale focus prevents browser domination
+                // - sqrt(switches) * 5           — frequent-switch apps (chat, terminal) get boost
+                // - recency_factor * 50          — 4-hour half-life recency (strongest signal)
+                let focus_score = (total_focus.max(1.0).ln()).max(0.0) * 10.0;
+                let switch_score = (total_switches as f64).sqrt() * 5.0;
+                let recency_hours = if last_focus > 0.0 {
+                    (now - last_focus) / 3600.0
+                } else {
+                    999.0
+                };
+                let recency_score = 0.5_f64.powf(recency_hours / 4.0) * 50.0;
 
-            focus_score + switch_score + recency_score
-        }).collect()
+                focus_score + switch_score + recency_score
+            })
+            .collect()
     }
 
     /// Get session activity data for display.
     pub fn session_stats(&self) -> Vec<(String, SessionActivity)> {
-        let mut stats: Vec<_> = self.session.iter()
+        let mut stats: Vec<_> = self
+            .session
+            .iter()
             .map(|(id, act)| (id.clone(), act.clone()))
             .collect();
-        stats.sort_by(|a, b| b.1.focus_secs.partial_cmp(&a.1.focus_secs).unwrap_or(std::cmp::Ordering::Equal));
+        stats.sort_by(|a, b| {
+            b.1.focus_secs
+                .partial_cmp(&a.1.focus_secs)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         stats
     }
 
@@ -269,7 +312,11 @@ impl ActivityTracker {
             for (id, record) in &db.apps {
                 let focus_score = (record.total_focus_secs.max(1.0).ln()).max(0.0) * 10.0;
                 let switch_score = (record.total_switches as f64).sqrt() * 5.0;
-                let recency_hours = if record.last_focus_ts > 0.0 { (now - record.last_focus_ts) / 3600.0 } else { 999.0 };
+                let recency_hours = if record.last_focus_ts > 0.0 {
+                    (now - record.last_focus_ts) / 3600.0
+                } else {
+                    999.0
+                };
                 let recency_score = 0.5_f64.powf(recency_hours / 4.0) * 50.0;
                 scored.push((id.clone(), focus_score + switch_score + recency_score));
             }

@@ -4,3 +4,8 @@
 
 log.txt
 .claude/
+
+/target-publish
+/dist
+
+/scripts/marketing/node_modules/
