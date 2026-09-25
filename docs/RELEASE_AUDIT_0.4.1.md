@@ -17,6 +17,7 @@ Requested by Trent after a Pin action matched all Windows Terminal windows.
 | Malformed dimensions/weights could panic or allocate excessively | 1..8 bounds; normalized finite weights and positive dimensions. |
 | Hidden eframe viewport could leave Poll active | Small vendored Windows repaint patch; hidden native loop tested. |
 | Interrupted saves could truncate settings | Write/sync a temporary file, then replace the complete TOML. |
+| Portable EXE imported VCRUNTIME140.dll | MSVC CRT is linked statically; final PE imports are checked before packaging. |
 | Branding became faint in extreme themes | Theme colors with separate dark and bright edges, tested at 16..64 pixels. |
 
 ## Evidence

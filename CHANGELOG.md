@@ -8,6 +8,7 @@
 - Current settings and ordering for tray/hotkey actions; saved grids update the menu.
 - Aligned zebra rows, grid boundaries without remainder seams and a smaller window.
 - Theme-responsive four-square app/tray icon; author portrait in About.
+- Static MSVC runtime for the portable Windows executable.
 - Bounded layout parsing, resilient weights, atomic settings writes and a hidden
   eframe repaint fix to prevent a Windows idle-loop CPU spin.
 - 31 ordinary tests plus explicit native placement, hidden-window and image reviews.
