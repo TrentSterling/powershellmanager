@@ -65,7 +65,7 @@ try {
         }
     }
     if (Test-Path -LiteralPath $reportPath) { Remove-Item -LiteralPath $reportPath }
-    $testOnlyPattern = '(ui_tests|native_audit|action_tests|activity[/\\]tests|config[/\\]tests|persistence[/\\]tests|theme[/\\]tests|tray[/\\]tests|windows[/\\]tests|hotkey[/\\]tests|app[/\\]tests|updates[/\\]tests|monitor[/\\]tests|gui[/\\]preview[/\\]tests)'
+    $testOnlyPattern = '(ui_tests|native_audit|action_tests|activity[/\\]tests|config[/\\]tests|persistence[/\\]tests|theme[/\\]tests|tray[/\\]tests|windows[/\\]tests|hotkey[/\\]tests|app[/\\]tests|updates[/\\]tests|monitor[/\\]tests|gui[/\\]preview[/\\]tests|sticky[/\\]tests|auto[/\\]tests)'
     $coverageArgs = @(
         'llvm-cov', '--locked', '--offline', '--no-cfg-coverage',
         '--no-report'

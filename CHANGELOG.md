@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 (2026-10-01)
+
+- Auto-arrange new windows (off by default): a new matching window moves into the
+  first free slot about a second after it opens, once it stops resizing. Windows
+  that already have a slot never move, and turning auto mode on moves nothing.
+- Sticky slots: Apply keeps each window in the slot it already occupies, remembered
+  this session or recognized by position after a restart. Focus changes and
+  activity ranking no longer reshuffle the grid; ranking only orders windows that
+  do not have a slot yet. Only the grabbers reorder placed windows. A window moved
+  by hand keeps its slot and returns to it on Apply.
+- Slide to fill gaps (off by default): when a window closes, later windows move up.
+  Otherwise the hole stays for the next new window.
+- Overflow to other display (off by default): with every slot full, new windows use
+  the same grid on another display; otherwise they stay where they opened.
+- Auto placements enter session Undo, and pins still win over remembered slots.
+
 ## 0.4.2 (2026-09-30)
 
 - Remove the header tagline. A small "by tront.xyz" link sits under the title at

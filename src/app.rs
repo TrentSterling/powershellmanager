@@ -411,9 +411,11 @@ impl PsmApp {
                 disabled: &self.disabled_cells,
                 weights,
                 pins: &self.config.pin,
+                memory: (!self.config.defaults.manual_order).then_some(&history.slots),
             },
             &self.managed_windows,
         );
+        crate::sticky::remember(&mut history.slots, &result.placed);
         log::info!(
             "Arranged {} windows ({} skipped, {} errors)",
             result.arranged,
@@ -475,11 +477,21 @@ impl PsmApp {
     }
 
     pub fn assignment(&self) -> crate::order::Assignment {
-        crate::order::assign(
+        // The preview shows remembered slots, matching what Apply will do.
+        let preferred: Vec<Option<usize>> = match self.history.lock() {
+            Ok(history) if !self.config.defaults.manual_order => self
+                .managed_windows
+                .iter()
+                .map(|w| history.slots.get(&w.hwnd).copied())
+                .collect(),
+            _ => Vec::new(),
+        };
+        crate::order::assign_with(
             &self.managed_windows,
             &self.config.pin,
             self.active_preset().slot_count(),
             &self.disabled_cells,
+            &preferred,
         )
     }
 
@@ -910,6 +922,8 @@ fn run_action_worker(
     state: &WorkerState,
 ) {
     let mut pending_hotkey = false;
+    let mut auto = crate::auto::AutoState::default();
+    let mut ticks = 0u32;
     while !state.quitting.load(Ordering::Relaxed) {
         events.wait();
         if state.quitting.load(Ordering::Relaxed) {
@@ -917,6 +931,10 @@ fn run_action_worker(
         }
         if let Ok(mut tracker) = state.activity.lock() {
             tracker.update();
+        }
+        ticks = ticks.wrapping_add(1);
+        if ticks.is_multiple_of(crate::auto::SCAN_TICKS) {
+            auto_tick(&mut auto, desktop, ctx, hwnd, state);
         }
         let action = events.menu();
         pending_hotkey |= events.hotkey();
@@ -927,6 +945,26 @@ fn run_action_worker(
             hwnd,
             state,
         );
+    }
+}
+
+/// Auto mode reads current settings each pass and repaints only when it reports.
+fn auto_tick(
+    auto: &mut crate::auto::AutoState,
+    desktop: &mut dyn crate::desktop::Desktop,
+    ctx: &egui::Context,
+    hwnd: isize,
+    state: &WorkerState,
+) {
+    let Ok(config) = state.live.lock().map(|live| live.config.clone()) else {
+        return;
+    };
+    let Ok(mut history) = state.history.lock() else {
+        return;
+    };
+    if let Some(status) = crate::auto::scan(auto, desktop, hwnd, &config, &mut history) {
+        history.pending_status = Some(status);
+        ctx.request_repaint();
     }
 }
 
@@ -1006,9 +1044,11 @@ fn dispatch_tray_action(
                     disabled: &request.disabled,
                     weights,
                     pins: &cfg.pin,
+                    memory: (!cfg.defaults.manual_order).then_some(&history.slots),
                 },
                 &queue,
             );
+            crate::sticky::remember(&mut history.slots, &result.placed);
             log::info!(
                 "Tray/hotkey: {} arranged, {} skipped, {:?}, {:?}",
                 result.arranged,

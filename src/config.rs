@@ -77,6 +77,15 @@ pub struct Defaults {
     pub manual_order: bool,
     #[serde(default = "default_decay_half_life")]
     pub decay_half_life_days: f64,
+    /// New matching windows move into the first free slot; placed windows stay put.
+    #[serde(default)]
+    pub auto_arrange: bool,
+    /// When a window closes, later windows slide up instead of leaving the hole.
+    #[serde(default)]
+    pub slide_to_fill: bool,
+    /// With every slot full, auto mode uses the same grid on another display.
+    #[serde(default)]
+    pub overflow_display: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +176,9 @@ impl Default for Defaults {
             smart_sort: false,
             manual_order: false,
             decay_half_life_days: default_decay_half_life(),
+            auto_arrange: false,
+            slide_to_fill: false,
+            overflow_display: false,
         }
     }
 }

@@ -273,6 +273,7 @@ fn native_placement_moves_only_owned_hidden_windows() {
             disabled: &disabled,
             weights,
             pins: &pins,
+            memory: None,
         },
         &queue,
     );

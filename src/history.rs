@@ -21,6 +21,8 @@ pub trait WindowBackend {
 pub struct LayoutHistory {
     steps: VecDeque<Vec<WindowSnapshot>>,
     pub pending_status: Option<String>,
+    /// Sticky slots share this lock, so GUI, tray and auto mode never race.
+    pub slots: crate::sticky::SlotMemory,
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +65,8 @@ impl LayoutHistory {
         };
         let mut retry = Vec::new();
         for snapshot in snapshots {
+            // Restored windows sit where they were; their position decides their slot again.
+            self.slots.remove(&snapshot.hwnd);
             match backend.restore(&snapshot) {
                 Ok(RestoreStatus::Restored) => result.restored += 1,
                 Ok(RestoreStatus::Closed) => result.closed += 1,

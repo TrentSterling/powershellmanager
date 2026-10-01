@@ -153,6 +153,7 @@ fn apply_layout(layout_str: &str, config: &Config, desktop: &mut dyn Desktop) ->
             disabled: &HashSet::new(),
             weights: None,
             pins: &config.pin,
+            memory: None,
         },
         &queue,
     );

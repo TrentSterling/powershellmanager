@@ -2145,3 +2145,75 @@ pub(crate) fn audit_native_creation_context_on_current_event_loop() {
     assert!(scratch.0.join("activity.toml").is_file());
     println!("NATIVE STARTUP PASS: real creation context and PsmApp update; owned hidden viewport/tray; action worker started/joined and controlled hotkey released; only local settings/activity saved");
 }
+
+fn grid_app(desktop: &TestDesktop, scratch: &Scratch, cols: u32) -> PsmApp {
+    let mut app = live_app(Config::default(), desktop.clone(), scratch);
+    app.config.defaults.use_custom = true;
+    app.config.defaults.custom_cols = cols;
+    app.config.defaults.custom_rows = 1;
+    app.use_custom = true;
+    app.custom_cols = cols;
+    app.custom_rows = 1;
+    app.ensure_weights();
+    app
+}
+
+#[test]
+fn apply_keeps_each_window_in_its_slot_when_the_queue_order_changes() {
+    let scratch = Scratch::new();
+    let desktop = TestDesktop::new([1, 2, 3]);
+    let mut app = grid_app(&desktop, &scratch, 3);
+    app.apply_current_layout();
+    let first = desktop.0.lock().unwrap().moved.clone();
+    assert_eq!(first.len(), 3);
+    desktop.0.lock().unwrap().fresh.reverse();
+    app.apply_current_layout();
+    let desk = desktop.0.lock().unwrap();
+    for (hwnd, x, ..) in &desk.moved[3..] {
+        let before = first.iter().find(|m| m.0 == *hwnd).unwrap();
+        assert_eq!(before.1, *x, "window {hwnd} changed slot");
+    }
+    drop(desk);
+    let preview = app.assignment().slots;
+    assert_eq!(preview.iter().flatten().count(), 3);
+    app.config.defaults.manual_order = true;
+    assert_eq!(app.assignment().slots, [Some(0), Some(1), Some(2)]);
+}
+
+#[test]
+fn worker_auto_tick_places_arrivals_reports_status_and_skips_poisoned_state() {
+    let scratch = Scratch::new();
+    let desktop = TestDesktop::new([1]);
+    let mut app = grid_app(&desktop, &scratch, 2);
+    app.config.defaults.auto_arrange = true;
+    app.sync_live();
+    let state = worker_state(&app);
+    let ctx = egui::Context::default();
+    let mut auto = crate::auto::AutoState::default();
+    auto_tick(&mut auto, &mut desktop.clone(), &ctx, 444, &state);
+    {
+        let mut desk = desktop.0.lock().unwrap();
+        desk.fresh.push(window(2));
+        desk.snapshots.insert(2, snapshot(2));
+    }
+    auto_tick(&mut auto, &mut desktop.clone(), &ctx, 444, &state);
+    assert!(state.history.lock().unwrap().pending_status.is_none());
+    auto_tick(&mut auto, &mut desktop.clone(), &ctx, 444, &state);
+    assert_eq!(
+        state.history.lock().unwrap().pending_status.as_deref(),
+        Some("Auto: placed 1 new windows.")
+    );
+    assert_eq!(desktop.0.lock().unwrap().moved.len(), 1);
+
+    let detached = WorkerState {
+        live: Arc::new(Mutex::new(state.live.lock().unwrap().clone())),
+        activity: state.activity.clone(),
+        history: Arc::new(Mutex::new(crate::history::LayoutHistory::default())),
+        quitting: state.quitting.clone(),
+    };
+    poison(&detached.history);
+    auto_tick(&mut auto, &mut desktop.clone(), &ctx, 444, &detached);
+    poison(&detached.live);
+    auto_tick(&mut auto, &mut desktop.clone(), &ctx, 444, &detached);
+    assert_eq!(desktop.0.lock().unwrap().moved.len(), 1);
+}

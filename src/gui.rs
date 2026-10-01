@@ -215,11 +215,35 @@ fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
     }
     if ui
         .checkbox(&mut app.config.defaults.smart_sort, "Rank by activity")
-        .on_hover_text("Frequently used and recently focused apps get earlier slots.")
+        .on_hover_text(
+            "Windows without a slot yet are ordered by recent use. Placed windows keep their slots.",
+        )
         .changed()
     {
         app.config.defaults.manual_order = false;
         app.refresh_windows();
+        app.save_config();
+    }
+    let d = &mut app.config.defaults;
+    let auto_on = d.auto_arrange;
+    let changed = [
+        ui.checkbox(&mut d.auto_arrange, "Auto-arrange new windows")
+            .on_hover_text("New windows move into the first free slot. Nothing else moves.")
+            .changed(),
+        ui.add_enabled(
+            auto_on,
+            egui::Checkbox::new(&mut d.slide_to_fill, "Slide to fill gaps"),
+        )
+        .on_hover_text("When a window closes, later windows move up instead of leaving the hole.")
+        .changed(),
+        ui.add_enabled(
+            auto_on,
+            egui::Checkbox::new(&mut d.overflow_display, "Overflow to other display"),
+        )
+        .on_hover_text("With every slot full, new windows use the same grid on another display.")
+        .changed(),
+    ];
+    if changed.contains(&true) {
         app.save_config();
     }
     section(ui, "DISPLAY", t);

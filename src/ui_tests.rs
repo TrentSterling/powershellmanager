@@ -2560,3 +2560,17 @@ fn inventory_rows_do_not_overlap_at_wide_and_compact_widths() {
         }
     }
 }
+
+#[test]
+fn auto_mode_toggles_save_and_unlock_their_options() {
+    let ctx = egui::Context::default();
+    let mut app = fixture();
+    let size = egui::vec2(1200.0, 1400.0);
+    let _ = click_text(&ctx, &mut app, size, "Slide to fill gaps");
+    assert!(!app.config.defaults.slide_to_fill);
+    let _ = click_text(&ctx, &mut app, size, "Auto-arrange new windows");
+    assert!(app.config.defaults.auto_arrange);
+    let _ = click_text(&ctx, &mut app, size, "Slide to fill gaps");
+    let _ = click_text(&ctx, &mut app, size, "Overflow to other display");
+    assert!(app.config.defaults.slide_to_fill && app.config.defaults.overflow_display);
+}

@@ -1,6 +1,6 @@
 [package]
 name = "powershellmanager"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 description = "A native Windows layout manager with manual ordering and ColorMagic Theme Studio"
 license-file = "LICENSE"

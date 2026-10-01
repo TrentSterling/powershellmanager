@@ -146,42 +146,45 @@ pub fn layout_request(config: &Config, action: &TrayAction) -> Option<LayoutRequ
             weights: None,
             disabled: HashSet::new(),
         }),
-        TrayAction::ApplyCurrent => {
-            let d = &config.defaults;
-            let preset = if d.use_custom {
-                LayoutPreset::Grid {
-                    cols: d.custom_cols.clamp(1, 8),
-                    rows: d.custom_rows.clamp(1, 8),
-                }
-            } else {
-                let mut presets = builtin_presets();
-                presets.extend(
-                    config
-                        .layout
-                        .iter()
-                        .filter_map(|l| l.to_preset().map(|p| (l.name.clone(), p))),
-                );
-                if d.selected_preset >= presets.len() {
-                    if let Some(g) = config.saved_grid.get(d.selected_preset - presets.len()) {
-                        return Some(saved_request(g));
-                    }
-                }
-                presets
-                    .get(d.selected_preset)
-                    .map(|(_, p)| p.clone())
-                    .unwrap_or(LayoutPreset::Grid { cols: 2, rows: 2 })
-            };
-            Some(LayoutRequest {
-                preset,
-                weights: if d.use_custom {
-                    Some((d.col_weights.clone(), d.row_weights.clone()))
-                } else {
-                    None
-                },
-                disabled: d.disabled_cells.iter().copied().collect(),
-            })
-        }
+        TrayAction::ApplyCurrent => Some(current_request(config)),
         _ => None,
+    }
+}
+
+/// The layout the workspace currently shows, as Apply and auto mode use it.
+pub fn current_request(config: &Config) -> LayoutRequest {
+    let d = &config.defaults;
+    let preset = if d.use_custom {
+        LayoutPreset::Grid {
+            cols: d.custom_cols.clamp(1, 8),
+            rows: d.custom_rows.clamp(1, 8),
+        }
+    } else {
+        let mut presets = builtin_presets();
+        presets.extend(
+            config
+                .layout
+                .iter()
+                .filter_map(|l| l.to_preset().map(|p| (l.name.clone(), p))),
+        );
+        if d.selected_preset >= presets.len() {
+            if let Some(g) = config.saved_grid.get(d.selected_preset - presets.len()) {
+                return saved_request(g);
+            }
+        }
+        presets
+            .get(d.selected_preset)
+            .map(|(_, p)| p.clone())
+            .unwrap_or(LayoutPreset::Grid { cols: 2, rows: 2 })
+    };
+    LayoutRequest {
+        preset,
+        weights: if d.use_custom {
+            Some((d.col_weights.clone(), d.row_weights.clone()))
+        } else {
+            None
+        },
+        disabled: d.disabled_cells.iter().copied().collect(),
     }
 }
 

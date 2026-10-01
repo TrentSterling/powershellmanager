@@ -13,6 +13,8 @@ pub struct ArrangeResult {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub snapshots: Vec<WindowSnapshot>,
+    /// Successfully moved windows and their physical slot indices.
+    pub placed: Vec<(isize, usize)>,
 }
 
 impl ArrangeResult {
@@ -37,6 +39,8 @@ pub(crate) struct ArrangeSettings<'a> {
     pub disabled: &'a HashSet<usize>,
     pub weights: Option<(&'a [f32], &'a [f32])>,
     pub pins: &'a [PinRule],
+    /// Sticky slots; None lets the queue order decide (manual order, headless).
+    pub memory: Option<&'a crate::sticky::SlotMemory>,
 }
 
 pub(crate) fn arrange_with(
@@ -52,19 +56,50 @@ pub(crate) fn arrange_with(
             errors: vec!["No monitors found".into()],
             warnings: Vec::new(),
             snapshots: Vec::new(),
+            placed: Vec::new(),
         };
     }
     let area = resolve_monitor(monitors, settings.monitor_spec).work_area;
-    let (placements, warnings) = crate::order::placements(
-        settings.preset,
-        &area,
-        settings.gap,
-        settings.disabled,
-        settings.weights,
+    let slots = crate::order::grid_slots(settings.preset, &area, settings.gap, settings.weights);
+    let preferred = settings
+        .memory
+        .map(|memory| crate::sticky::preferred(windows, &slots, memory))
+        .unwrap_or_default();
+    let plan = crate::order::assign_with(
         windows,
         settings.pins,
+        slots.len(),
+        settings.disabled,
+        &preferred,
     );
-    execute_plan(backend, placements, windows.len(), warnings)
+    let moves = plan
+        .slots
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, window)| window.map(|i| (windows[i].hwnd, slot)))
+        .collect();
+    execute_slots(backend, &slots, moves, windows.len(), plan.warnings)
+}
+
+/// Move windows to slot indices and report which ones actually landed.
+pub(crate) fn execute_slots(
+    backend: &mut dyn WindowBackend,
+    slots: &[crate::layout::Slot],
+    moves: Vec<(isize, usize)>,
+    total_windows: usize,
+    warnings: Vec<String>,
+) -> ArrangeResult {
+    let placements = moves
+        .iter()
+        .map(|&(hwnd, slot)| (hwnd, slots[slot].clone()))
+        .collect();
+    let mut result = execute_plan(backend, placements, total_windows, warnings);
+    let moved: HashSet<isize> = result.snapshots.iter().map(|s| s.hwnd).collect();
+    result.placed = moves
+        .into_iter()
+        .filter(|(hwnd, _)| moved.contains(hwnd))
+        .collect();
+    result
 }
 
 pub fn execute_plan(
@@ -79,6 +114,7 @@ pub fn execute_plan(
         errors: Vec::new(),
         warnings,
         snapshots: Vec::new(),
+        placed: Vec::new(),
     };
     for (hwnd, slot) in placements {
         let snapshot = match backend.capture(hwnd) {
