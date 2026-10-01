@@ -103,6 +103,8 @@
 - Custom dividers track the pointer with the actual grid gaps and pixel boundaries.
   Resizing preserves adjacent cells' combined size and enforces their minimum weights.
 - Pointer regression tests cover display geometry, large gaps and divider limits.
+- Activity save and decay timing tests advance an injected clock, so they pass on
+  freshly booted machines such as CI runners.
 
 ## 0.4.1 (2026-09-24)
 

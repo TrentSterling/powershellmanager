@@ -120,6 +120,12 @@ impl ActivityTracker {
     }
 
     fn update_at(&mut self, now: f64) {
+        self.update_with_clock(now, Instant::now());
+    }
+
+    // Tests advance `clock` instead of rewinding the stored instants: Windows
+    // instants start at boot, so an hour in the past underflows on fresh CI runners.
+    fn update_with_clock(&mut self, now: f64, clock: Instant) {
         // Drain all pending events
         while let Ok(event) = self.rx.try_recv() {
             if !event.timestamp.is_finite() || event.timestamp < 0.0 {
@@ -181,17 +187,17 @@ impl ActivityTracker {
         }
 
         // Periodic save (every 60s)
-        if self.last_save.elapsed() >= Duration::from_secs(60) {
+        if clock.saturating_duration_since(self.last_save) >= Duration::from_secs(60) {
             self.flush_current_focus_at(now);
             self.save();
-            self.last_save = Instant::now();
+            self.last_save = clock;
         }
 
         // Periodic decay (every hour)
-        if self.last_decay.elapsed() >= Duration::from_secs(3600) {
+        if clock.saturating_duration_since(self.last_decay) >= Duration::from_secs(3600) {
             self.flush_current_focus_at(now);
             self.apply_decay_at(now);
-            self.last_decay = Instant::now();
+            self.last_decay = clock;
         }
     }
 

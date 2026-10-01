@@ -220,9 +220,7 @@ fn periodic_flush_and_decay_preserve_live_totals_without_double_charging() {
         timestamp: 1000.0,
     })
     .unwrap();
-    tracker.last_save = Instant::now() - Duration::from_secs(61);
-    tracker.last_decay = Instant::now() - Duration::from_secs(3601);
-    tracker.update_at(1010.0);
+    tracker.update_with_clock(1010.0, Instant::now() + Duration::from_secs(3601));
     assert_eq!(
         tracker.db.lock().unwrap().apps["pwsh.exe"].total_focus_secs,
         10.0

@@ -29,8 +29,8 @@ The CHANGELOG lists every 0.4.2 change.
 
 `scripts/coverage.ps1 -EnforceFullCoverage`: 181 instrumented tests passed, including
 10 native audits and the GPU offscreen review (the public gallery capture is skipped).
-Coverage across all 27 production source files: lines 5120/5120, functions 513/513,
-regions 5809/5809, branches 1008/1008. Test-only modules are the only exclusions.
+Coverage across all 27 production source files: lines 5123/5123, functions 514/514,
+regions 5813/5813, branches 1008/1008. Test-only modules are the only exclusions.
 
 Native audits create and move only their own windows, on a private Win32 desktop that
 is never switched into view. No global desktop input is synthesized. Real user windows
