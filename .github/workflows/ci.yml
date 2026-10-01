@@ -4,6 +4,11 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_coverage:
+        description: Run the full 100% coverage gate on an interactive Windows runner
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -28,3 +33,29 @@ jobs:
             NOTICE
             THIRD_PARTY_NOTICES.txt
             README.md
+  native-coverage:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_coverage }}
+    runs-on: [self-hosted, Windows, X64, psm-desktop]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.0
+      - run: rustup toolchain install nightly-2026-09-29 --profile minimal --component llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-coverage-2026-09-29
+      - run: cargo +1.93.0 install cargo-llvm-cov --version 0.9.1 --locked
+      - run: cargo +nightly-2026-09-29 fetch --locked
+      - name: Native audits, GPU review, CLI smoke and full coverage gate
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path target -Force | Out-Null
+          ./scripts/coverage.ps1 -EnforceFullCoverage -CoverageToolchain nightly-2026-09-29 *> target/coverage-run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: powershellmanager-native-quality
+          path: |
+            target/coverage.json
+            target/coverage-run.log
+            target/ui-review/*.png

@@ -18,7 +18,7 @@ pub struct Studio {
     name: String,
     code: String,
     message: String,
-    save_pending: bool,
+    pub(crate) save_pending: bool,
 }
 
 impl Studio {
@@ -48,11 +48,14 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
     let mut studio = std::mem::take(&mut app.studio);
     let mut open = true;
     let t = theme::tokens(before);
+    let screen = ctx.screen_rect();
+    let studio_width = (screen.width() - 32.0).clamp(180.0, 410.0);
     egui::Window::new("Theme Studio")
         .id(egui::Id::new("psm-theme-studio"))
         .open(&mut open)
-        .default_width(410.0)
-        .min_width((ctx.screen_rect().width() - 32.0).clamp(180.0, 300.0))
+        .default_width(studio_width)
+        .min_width(studio_width.min(300.0))
+        .max_width((screen.width() - 16.0).max(180.0))
         .default_height(780.0)
         .default_pos(egui::pos2(
             (ctx.screen_rect().width() - 440.0).max(8.0),
@@ -63,12 +66,16 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
         .frame(
             egui::Frame::window(&ctx.style())
                 .fill(t.panel)
-                .stroke(Stroke::new(1.5, t.ink(t.accent))),
+                .stroke(Stroke::new(1.5_f32, t.ink(t.accent))),
         )
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .max_height((ctx.screen_rect().height() - 145.0).max(220.0))
                 .show(ui, |ui| {
+                    ui.spacing_mut().slider_width = ui
+                        .spacing()
+                        .slider_width
+                        .min((ui.available_width() - 170.0).max(48.0));
                     ui.label(
                         RichText::new("MAKE IT YOURS")
                             .color(t.ink(t.secondary))
@@ -184,9 +191,10 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
                         }
                     });
                     egui::CollapsingHeader::new("Saved themes & sharing").show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut studio.name)
+                                    .id(egui::Id::new("theme-name"))
                                     .hint_text("Theme name")
                                     .desired_width(180.0),
                             );
@@ -214,10 +222,14 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
                         });
                         let mut remove = None;
                         for (i, saved) in app.config.saved_theme.iter().enumerate() {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 if ui.button(&saved.name).clicked() {
                                     if let Some(theme) = ThemeSettings::decode(&saved.code) {
                                         *s = theme;
+                                    } else {
+                                        studio.message =
+                                            "Invalid saved theme. Your current theme was kept."
+                                                .into();
                                     }
                                 }
                                 if ui.small_button("Delete").clicked() {
@@ -231,6 +243,7 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
                         ui.label("Paste a Trontop or PowerShellManager theme here.");
                         ui.add(
                             egui::TextEdit::multiline(&mut studio.code)
+                                .id(egui::Id::new("theme-code"))
                                 .desired_rows(3)
                                 .desired_width(f32::INFINITY)
                                 .char_limit(16384),
@@ -301,9 +314,9 @@ fn gradient_editor(ui: &mut egui::Ui, s: &mut ThemeSettings, selected: &mut usiz
         ui.painter().circle_stroke(
             center,
             8.0,
-            Stroke::new(if *selected == i { 2.5 } else { 1.0 }, Color32::WHITE),
+            Stroke::new(if *selected == i { 2.5_f32 } else { 1.0 }, Color32::WHITE),
         );
         ui.painter()
-            .circle_stroke(center, 9.5, Stroke::new(1.0, Color32::BLACK));
+            .circle_stroke(center, 9.5, Stroke::new(1.0_f32, Color32::BLACK));
     }
 }

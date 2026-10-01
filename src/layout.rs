@@ -34,18 +34,12 @@ impl LayoutPreset {
 
         // "columns:4" or "columns 4"
         if let Some(rest) = s.strip_prefix("columns") {
-            let n = rest.trim_start_matches(':').trim().parse::<u32>().ok()?;
-            if (1..=8).contains(&n) {
-                return Some(Self::Columns(n));
-            }
+            return parse_count(rest, 0).map(Self::Columns);
         }
 
         // "rows:3" or "rows 3"
         if let Some(rest) = s.strip_prefix("rows") {
-            let n = rest.trim_start_matches(':').trim().parse::<u32>().ok()?;
-            if (1..=8).contains(&n) {
-                return Some(Self::Rows(n));
-            }
+            return parse_count(rest, 0).map(Self::Rows);
         }
 
         if s == "left-right" || s == "leftright" || s == "split" {
@@ -56,38 +50,15 @@ impl LayoutPreset {
             return Some(Self::TopBottom);
         }
 
-        if s.starts_with("main-side") || s.starts_with("mainside") {
-            let rest = s
-                .trim_start_matches("main-side")
-                .trim_start_matches("mainside")
-                .trim_start_matches(':')
-                .trim();
-            let n = if rest.is_empty() {
-                2
-            } else {
-                rest.parse::<u32>().ok()?
-            };
-            if !(1..=8).contains(&n) {
-                return None;
-            }
-            return Some(Self::MainSide {
-                side_count: n.max(1),
-            });
+        if let Some(rest) = s
+            .strip_prefix("main-side")
+            .or_else(|| s.strip_prefix("mainside"))
+        {
+            return parse_count(rest, 2).map(|side_count| Self::MainSide { side_count });
         }
 
-        if s.starts_with("focus") {
-            let rest = s.trim_start_matches("focus").trim_start_matches(':').trim();
-            let n = if rest.is_empty() {
-                3
-            } else {
-                rest.parse::<u32>().ok()?
-            };
-            if !(1..=8).contains(&n) {
-                return None;
-            }
-            return Some(Self::Focus {
-                side_count: n.max(1),
-            });
+        if let Some(rest) = s.strip_prefix("focus") {
+            return parse_count(rest, 3).map(|side_count| Self::Focus { side_count });
         }
 
         None
@@ -124,152 +95,43 @@ impl LayoutPreset {
             return Vec::new();
         }
         let gap = gap.clamp(0, 64).min((area.w.min(area.h) / 8 - 1).max(0));
-        if let Self::Grid { cols, rows } = self {
-            return compute_weighted_grid(
-                *cols,
-                *rows,
-                area,
-                gap,
-                &vec![1.0; *cols as usize],
-                &vec![1.0; *rows as usize],
-            );
-        }
-
         match self {
-            Self::Grid { cols, rows } => {
-                let cols = *cols as i32;
-                let rows = *rows as i32;
-                let total_gap_x = gap * (cols - 1);
-                let total_gap_y = gap * (rows - 1);
-                let cell_w = (area.w - total_gap_x) / cols;
-                let cell_h = (area.h - total_gap_y) / rows;
-
-                let mut slots = Vec::with_capacity((cols * rows) as usize);
-                for r in 0..rows {
-                    for c in 0..cols {
-                        slots.push(Slot {
-                            x: area.x + c * (cell_w + gap),
-                            y: area.y + r * (cell_h + gap),
-                            w: cell_w,
-                            h: cell_h,
-                        });
-                    }
-                }
-                slots
-            }
-            Self::Columns(n) => {
-                let n = *n as i32;
-                let total_gap = gap * (n - 1);
-                let col_w = (area.w - total_gap) / n;
-
-                (0..n)
-                    .map(|i| Slot {
-                        x: area.x + i * (col_w + gap),
-                        y: area.y,
-                        w: col_w,
-                        h: area.h,
-                    })
-                    .collect()
-            }
-            Self::Rows(n) => {
-                let n = *n as i32;
-                let total_gap = gap * (n - 1);
-                let row_h = (area.h - total_gap) / n;
-
-                (0..n)
-                    .map(|i| Slot {
-                        x: area.x,
-                        y: area.y + i * (row_h + gap),
-                        w: area.w,
-                        h: row_h,
-                    })
-                    .collect()
-            }
-            Self::LeftRight => {
-                let half_w = (area.w - gap) / 2;
-                vec![
-                    Slot {
-                        x: area.x,
-                        y: area.y,
-                        w: half_w,
-                        h: area.h,
-                    },
-                    Slot {
-                        x: area.x + half_w + gap,
-                        y: area.y,
-                        w: half_w,
-                        h: area.h,
-                    },
-                ]
-            }
-            Self::TopBottom => {
-                let half_h = (area.h - gap) / 2;
-                vec![
-                    Slot {
-                        x: area.x,
-                        y: area.y,
-                        w: area.w,
-                        h: half_h,
-                    },
-                    Slot {
-                        x: area.x,
-                        y: area.y + half_h + gap,
-                        w: area.w,
-                        h: half_h,
-                    },
-                ]
-            }
-            Self::MainSide { side_count } => {
-                let side_count = *side_count as i32;
-                let main_w = (area.w - gap) * 2 / 3;
-                let side_w = area.w - main_w - gap;
-                let total_gap_y = gap * (side_count - 1);
-                let side_h = (area.h - total_gap_y) / side_count;
-
-                let mut slots = Vec::with_capacity(1 + side_count as usize);
-                slots.push(Slot {
+            Self::Grid { cols, rows } => compute_weighted_grid(*cols, *rows, area, gap, &[], &[]),
+            Self::Columns(n) => compute_weighted_grid(*n, 1, area, gap, &[], &[]),
+            Self::Rows(n) => compute_weighted_grid(1, *n, area, gap, &[], &[]),
+            Self::LeftRight => compute_weighted_grid(2, 1, area, gap, &[], &[]),
+            Self::TopBottom => compute_weighted_grid(1, 2, area, gap, &[], &[]),
+            Self::MainSide { side_count } | Self::Focus { side_count } => {
+                let (numerator, denominator) = if matches!(self, Self::Focus { .. }) {
+                    (3, 4)
+                } else {
+                    (2, 3)
+                };
+                let main_w = ((area.w - gap) as i64 * numerator / denominator) as i32;
+                let side_area = Rect {
+                    x: area.x + main_w + gap,
+                    y: area.y,
+                    w: area.w - main_w - gap,
+                    h: area.h,
+                };
+                let mut slots = vec![Slot {
                     x: area.x,
                     y: area.y,
                     w: main_w,
                     h: area.h,
-                });
-                for i in 0..side_count {
-                    slots.push(Slot {
-                        x: area.x + main_w + gap,
-                        y: area.y + i * (side_h + gap),
-                        w: side_w,
-                        h: side_h,
-                    });
-                }
-                slots
-            }
-            Self::Focus { side_count } => {
-                let side_count = *side_count as i32;
-                let main_w = (area.w - gap) * 3 / 4;
-                let side_w = area.w - main_w - gap;
-                let total_gap_y = gap * (side_count - 1);
-                let side_h = (area.h - total_gap_y) / side_count;
-
-                let mut slots = Vec::with_capacity(1 + side_count as usize);
-                slots.push(Slot {
-                    x: area.x,
-                    y: area.y,
-                    w: main_w,
-                    h: area.h,
-                });
-                for i in 0..side_count {
-                    slots.push(Slot {
-                        x: area.x + main_w + gap,
-                        y: area.y + i * (side_h + gap),
-                        w: side_w,
-                        h: side_h,
-                    });
-                }
+                }];
+                slots.extend(compute_weighted_grid(
+                    1,
+                    *side_count,
+                    &side_area,
+                    gap,
+                    &[],
+                    &[],
+                ));
                 slots
             }
         }
     }
-
     pub fn display_name(&self) -> String {
         match self {
             Self::Grid { cols, rows } => format!("{}x{} Grid", cols, rows),
@@ -281,6 +143,17 @@ impl LayoutPreset {
             Self::Focus { side_count } => format!("Focus + {} Side", side_count),
         }
     }
+}
+
+fn parse_count(rest: &str, default: u32) -> Option<u32> {
+    let rest = rest.trim();
+    let rest = rest.strip_prefix(':').unwrap_or(rest).trim();
+    let count = if rest.is_empty() {
+        default
+    } else {
+        rest.parse().ok()?
+    };
+    (1..=8).contains(&count).then_some(count)
 }
 
 /// Compute grid slots with per-column and per-row weight fractions.
@@ -317,7 +190,7 @@ pub fn compute_weighted_grid(
         let valid = values.len() == count
             && sum.is_finite()
             && sum > 0.0
-            && values.iter().all(|v| v.is_finite() && *v > 0.0);
+            && values.iter().all(|v| *v > 0.0);
         let available = extent - gap * (count as i32 - 1);
         let mut positions = Vec::new();
         let mut sizes = Vec::new();

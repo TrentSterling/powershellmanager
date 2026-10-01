@@ -56,13 +56,13 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, theme: ThemeSettings) {
             ui.painter().rect_stroke(
                 cell,
                 3.0,
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(10, 12, 18)),
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(10, 12, 18)),
                 egui::StrokeKind::Inside,
             );
             ui.painter().rect_stroke(
                 cell.shrink(1.0),
                 2.0,
-                egui::Stroke::new(0.8, egui::Color32::from_rgb(245, 248, 255)),
+                egui::Stroke::new(0.8_f32, egui::Color32::from_rgb(245, 248, 255)),
                 egui::StrokeKind::Inside,
             );
         }

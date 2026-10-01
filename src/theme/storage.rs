@@ -60,6 +60,7 @@ impl ThemeSettings {
                 color: rgb(&value["color"])?,
             };
         }
+        let frost = number(&v["panel_opacity"])?;
         Some(
             Self {
                 dark: v["dark"].as_bool()?,
@@ -69,9 +70,9 @@ impl ThemeSettings {
                 gradient_enabled: v["gradient_enabled"].as_bool()?,
                 gradient_angle: number(&v["gradient_angle"])?,
                 gradient_strength: number(&v["gradient_strength"])?,
-                frost: number(&v["panel_opacity"])?,
+                frost,
                 frost_light: if version == 3 {
-                    number(&v["panel_opacity"])?
+                    frost
                 } else {
                     number(&v["frost_light"])?
                 },
@@ -125,6 +126,7 @@ fn legacy(value: &str) -> Option<ThemeSettings> {
     };
     let accent = rgb(fields[1])?;
     let secondary = rgb(fields[2])?;
+    let frost = number(fields[6])?;
     let stops = std::array::from_fn(|i| {
         let c = mix(super::rgb(accent), super::rgb(secondary), i as f32 / 3.0);
         Stop {
@@ -141,8 +143,8 @@ fn legacy(value: &str) -> Option<ThemeSettings> {
             gradient_enabled: boolean(fields[3])?,
             gradient_angle: number(fields[4])?,
             gradient_strength: number(fields[5])?,
-            frost: number(fields[6])?,
-            frost_light: number(fields[6])?,
+            frost,
+            frost_light: frost,
             roundness: number(fields[7])?,
             ..Default::default()
         }
@@ -151,79 +153,5 @@ fn legacy(value: &str) -> Option<ThemeSettings> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extended_controls_roundtrip_and_v3_migrates_without_losing_opacity() {
-        let s = ThemeSettings {
-            frost: 0.0,
-            frost_light: 0.35,
-            gradient_strength: 1.0,
-            surface_tint: 0.9,
-            text_strength: 0.7,
-            font: typography::FontChoice::RajdhaniBold,
-            ..Default::default()
-        };
-        assert_eq!(ThemeSettings::decode(&s.encode()), Some(s));
-        let mut old: Value = serde_json::from_str(&s.encode()).unwrap();
-        old["version"] = json!(3);
-        old["panel_opacity"] = json!(0.62);
-        for field in ["frost_light", "surface_tint", "text_strength", "font"] {
-            old.as_object_mut().unwrap().remove(field);
-        }
-        let migrated = ThemeSettings::decode(&old.to_string()).unwrap();
-        assert_eq!(migrated.frost, 0.62);
-        assert_eq!(migrated.frost_light, 0.62);
-        assert_eq!(migrated.font, typography::FontChoice::Sans);
-        assert_eq!(ThemeSettings::decode(&migrated.encode()), Some(migrated));
-        old["version"] = json!(4);
-        assert!(
-            ThemeSettings::decode(&old.to_string()).is_none(),
-            "incomplete v4 must not silently reset new preferences"
-        );
-    }
-
-    #[test]
-    fn presets_roundtrip_and_legacy_retains_original_ramp() {
-        for (_, s) in ThemeSettings::presets() {
-            assert_eq!(ThemeSettings::decode(&s.encode()), Some(s));
-        }
-        let s = ThemeSettings::decode("1;168,85,247;46,230,215;1;132;0.34;0.8;8").unwrap();
-        for i in 0..101 {
-            let p = i as f32 / 100.0;
-            let a = s.gradient_color(p).to_array();
-            let b = mix(rgb(s.accent), rgb(s.secondary), p).to_array();
-            for (a, b) in a.into_iter().zip(b) {
-                assert!((a as i16 - b as i16).abs() <= 1);
-            }
-        }
-        assert_eq!(ThemeSettings::decode(&s.encode()), Some(s));
-    }
-
-    #[test]
-    fn bad_imports_are_bounded_and_rejected() {
-        for value in [
-            "x;1,2,3;4,5,6;1;90;0.3;0.8;8",
-            "1;1,2,3,4;4,5,6;1;90;0.3;0.8;8",
-            "1;1,2,3;4,5,6;1;NaN;0.3;0.8;8",
-            "1;1,2,3;4,5,6;1;90;inf;0.8;8",
-            "{}",
-        ] {
-            assert!(ThemeSettings::decode(value).is_none());
-        }
-        assert!(ThemeSettings::decode(&" ".repeat(MAX_BYTES + 1)).is_none());
-        let base: Value = serde_json::from_str(&ThemeSettings::default().encode()).unwrap();
-        for (key, value) in [
-            ("version", json!(5)),
-            ("stops", json!([])),
-            ("roundness", json!(1e100)),
-            ("accent", json!([256, 0, 0])),
-            ("dark", json!("true")),
-        ] {
-            let mut v = base.clone();
-            v[key] = value;
-            assert!(ThemeSettings::decode(&v.to_string()).is_none(), "{key}");
-        }
-    }
-}
+#[path = "tests/storage.rs"]
+mod tests;

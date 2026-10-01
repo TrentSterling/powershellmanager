@@ -16,43 +16,58 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     theme::paint_background(ctx, app.theme_settings);
     let t = app.current_theme();
     let tokens = theme::tokens(app.theme_settings);
-    let compact_header = ctx.screen_rect().width() < 440.0;
+    let screen = ctx.screen_rect();
+    let compact_workspace = screen.height() < 480.0 || screen.width() < 360.0;
+    let compact_header = screen.width() < 560.0 || compact_workspace;
     egui::TopBottomPanel::top("brand")
         .frame(
             egui::Frame::NONE
                 .fill(theme::panel_color(app.theme_settings))
-                .inner_margin(16),
+                .inner_margin(if compact_header { 8 } else { 16 }),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::Vec2::splat(if compact_header { 24.0 } else { 32.0 }),
+                    egui::Sense::hover(),
+                );
                 crate::branding::paint(ui, rect, app.theme_settings);
                 ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     ui.label(
                         RichText::new(if compact_header {
                             "PSM"
                         } else {
                             "POWERSHELL MANAGER"
                         })
-                        .size(20.0)
+                        .size(if compact_header { 16.0 } else { 20.0 })
                         .strong(),
                     );
-                    if !compact_header {
-                        ui.label(RichText::new("Your windows. Your grid.").color(t.text_muted));
-                    }
+                    // Credit lives in the header so it shows without opening About.
+                    ui.add(egui::Hyperlink::from_label_and_url(
+                        RichText::new("by tront.xyz").small().color(t.text_muted),
+                        "https://tront.xyz",
+                    ));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new("About").selected(app.detail_tab == 3))
+                        .clicked()
+                    {
+                        app.detail_tab = 3;
+                    }
                     if ui.button("Theme Studio").clicked() {
                         app.show_theme_studio = !app.show_theme_studio;
                     }
                 });
             });
         });
-    egui::TopBottomPanel::bottom("apply-bar")
-        .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(12))
+    if app.detail_tab != 3 {
+        egui::TopBottomPanel::bottom("apply-bar")
+        .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(if compact_workspace { 8 } else { 12 }))
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
+                let button_height = if compact_workspace { 28.0 } else { 36.0 };
                 let enabled = app
                     .active_preset()
                     .slot_count()
@@ -60,16 +75,26 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 if ui
                     .add_enabled(
                         app.actions_available() && enabled > 0 && !app.managed_windows.is_empty(),
-                        egui::Button::new(RichText::new("Apply layout").strong())
+                        egui::Button::new(RichText::new(if compact_workspace { "Apply" } else { "Apply layout" }).strong())
                             .fill(tokens.accent_dim)
-                            .min_size(egui::vec2(140.0, 36.0)),
+                            .min_size(if compact_workspace { egui::vec2(80.0, 28.0) } else { egui::vec2(140.0, 36.0) }),
                     )
                     .clicked()
                 {
                     app.apply_current_layout();
                 }
+                let can_undo = app.history.lock().is_ok_and(|history| history.can_undo());
+                let undo = ui.add_enabled(app.actions_available() && can_undo,
+                    egui::Button::new(if compact_workspace { "Undo" } else { "Undo layout" })
+                        .min_size(egui::vec2(0.0, button_height)));
+                #[cfg(test)]
+                ctx.data_mut(|data| data.insert_temp(egui::Id::new("test-undo-button"), undo.rect));
+                if undo.on_hover_text("Restore positions and window states from the last Apply. Up to 20 steps per session.").clicked() {
+                    app.undo_layout();
+                }
                 if ui
-                    .add_enabled(app.actions_available(), egui::Button::new("Refresh"))
+                    .add_enabled(app.actions_available(), egui::Button::new("Refresh")
+                        .min_size(egui::vec2(0.0, button_height)))
                     .clicked()
                 {
                     app.refresh_windows();
@@ -80,10 +105,16 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     enabled
                 ));
             });
-            ui.label(RichText::new(&app.status).small().color(t.text_muted));
+            let status = RichText::new(&app.status).small().color(t.text_muted);
+            if compact_workspace {
+                ui.add(egui::Label::new(status).truncate()).on_hover_text(&app.status);
+            } else {
+                ui.label(status);
+            }
         });
-    let wide = ctx.screen_rect().width() >= 840.0;
-    if wide {
+    }
+    let wide = screen.width() >= 840.0;
+    if wide && app.detail_tab != 3 {
         egui::SidePanel::left("layout-rail")
             .exact_width(246.0)
             .resizable(false)
@@ -100,15 +131,31 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     });
             });
     }
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::panel_color(app.theme_settings)).inner_margin(18)).show(ctx, |ui| {
-        egui::ScrollArea::vertical().id_salt("workspace-scroll").show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::panel_color(app.theme_settings)).inner_margin(if compact_workspace { 8 } else { 18 })).show(ctx, |ui| {
+        let workspace_height = ui.available_height();
+        let _workspace = egui::ScrollArea::vertical().id_salt(if app.detail_tab == 3 { "about-scroll" } else { "workspace-scroll" }).show(ui, |ui| {
+            if app.detail_tab == 3 {
+                if ui.button("Back to workspace").clicked() {
+                    app.detail_tab = 0;
+                }
+                about(ui, app);
+                return;
+            }
+            let intro_y = ui.cursor().top();
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Layout workspace").size(26.0).strong());
+                ui.label(RichText::new(if compact_workspace { "Layout" } else { "Layout workspace" }).size(if compact_workspace { 20.0 } else { 26.0 }).strong());
                 ui.colored_label(t.accent2, if app.use_custom { "CUSTOM" } else { "PRESET" });
             });
-            ui.label(RichText::new(if app.use_custom { "Drag dividers to resize. Click a slot to enable or disable it." } else { "Click a slot to enable or disable it. Switch to Custom to drag dividers." }).color(t.text_muted));
+            if !compact_workspace {
+                ui.label(RichText::new(if app.use_custom { "Drag dividers to resize. Click a slot to enable or disable it." } else { "Click a slot to enable or disable it. Switch to Custom to drag dividers." }).color(t.text_muted));
+            }
             ui.add_space(5.0);
-            match draw_interactive_preview(ui, ctx, app, &t) {
+            let height_limit = if compact_workspace {
+                workspace_height - (ui.cursor().top() - intro_y) - 4.0
+            } else {
+                f32::INFINITY
+            };
+            match draw_interactive_preview(ui, ctx, app, &t, height_limit) {
                 PreviewAction::ToggleCell(index) => app.toggle_cell(index),
                 PreviewAction::WeightsChanged => app.save_layout(),
                 PreviewAction::None => {}
@@ -117,25 +164,30 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 ui.colored_label(t.accent2, "Occupied");
                 ui.colored_label(t.accent, "Available");
                 ui.colored_label(t.text_muted, "Disabled");
-                ui.label(RichText::new("Slot preview; windows move only when you apply.").small());
+                if !compact_workspace {
+                    ui.label(RichText::new("Slot preview; windows move only when you apply.").small());
+                }
             });
             if !wide {
-                egui::CollapsingHeader::new("Layout controls").default_open(true).show(ui, |ui| { controls(ui, app, &t); });
+                egui::CollapsingHeader::new("Layout controls").default_open(!compact_workspace).show(ui, |ui| { controls(ui, app, &t); });
             }
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut app.detail_tab, 0, format!("Windows ({})", app.managed_windows.len()));
                 ui.selectable_value(&mut app.detail_tab, 1, format!("Pins ({})", app.config.pin.len()));
                 ui.selectable_value(&mut app.detail_tab, 2, "Activity");
-                ui.selectable_value(&mut app.detail_tab, 3, "About");
             });
             ui.separator();
             match app.detail_tab {
                 1 => pins(ui, app, &t),
                 2 => activity(ui, app, &t),
-                3 => about(ui, app),
                 _ => inventory(ui, app, &t)
             }
+        });
+        #[cfg(test)]
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("test-workspace-scroll"), _workspace.id);
+            data.insert_temp(egui::Id::new("test-workspace-clip"), _workspace.inner_rect);
         });
     });
     crate::theme_studio::show(ctx, app);
@@ -286,22 +338,32 @@ fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
         }
         ui.add_space(2.0);
         let choices = [
-            "2x2",
-            "3x2",
-            "left-right",
-            "main-side",
-            "focus:3",
-            "columns:3",
+            (
+                "2x2",
+                crate::layout::LayoutPreset::Grid { cols: 2, rows: 2 },
+            ),
+            (
+                "3x2",
+                crate::layout::LayoutPreset::Grid { cols: 3, rows: 2 },
+            ),
+            ("left-right", crate::layout::LayoutPreset::LeftRight),
+            (
+                "main-side",
+                crate::layout::LayoutPreset::MainSide { side_count: 2 },
+            ),
+            (
+                "focus:3",
+                crate::layout::LayoutPreset::Focus { side_count: 3 },
+            ),
+            ("columns:3", crate::layout::LayoutPreset::Columns(3)),
         ];
         for pair in choices.chunks(2) {
             ui.horizontal(|ui| {
-                for name in pair {
-                    if let Some(preset) = crate::layout::LayoutPreset::parse(name) {
-                        let selected = preset == app.active_preset();
-                        if preset_button(ui, &preset, name, selected, t) {
-                            if let Some(i) = app.presets.iter().position(|(_, p)| *p == preset) {
-                                select_preset(app, i);
-                            }
+                for (name, preset) in pair {
+                    let selected = *preset == app.active_preset();
+                    if preset_button(ui, preset, name, selected, t) {
+                        if let Some(i) = app.presets.iter().position(|(_, p)| p == preset) {
+                            select_preset(app, i);
                         }
                     }
                 }
@@ -329,14 +391,15 @@ fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
 
 fn select_preset(app: &mut PsmApp, index: usize) {
     app.selected_preset = index;
-    let name = app.presets[index].0.clone();
-    if let Some(grid) = app
-        .config
-        .saved_grid
-        .iter()
-        .find(|g| g.name == name)
-        .cloned()
-    {
+    let first_saved = app
+        .presets
+        .len()
+        .saturating_sub(app.config.saved_grid.len());
+    let saved = index
+        .checked_sub(first_saved)
+        .and_then(|index| app.config.saved_grid.get(index))
+        .cloned();
+    if let Some(grid) = saved {
         app.load_saved_grid(&grid);
     } else {
         app.disabled_cells.clear();
@@ -367,7 +430,7 @@ fn preset_button(
     ui.painter().rect_stroke(
         rect,
         6.0,
-        Stroke::new(1.0, if selected { t.accent } else { t.border }),
+        Stroke::new(1.0_f32, if selected { t.accent } else { t.border }),
         egui::StrokeKind::Inside,
     );
     let area = Rect {
@@ -385,7 +448,7 @@ fn preset_button(
         ui.painter().rect_stroke(
             r,
             2.0,
-            Stroke::new(1.0, t.accent2),
+            Stroke::new(1.0_f32, t.accent2),
             egui::StrokeKind::Inside,
         );
     }
@@ -416,24 +479,13 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
             .add_enabled(app.actions_available(), egui::Button::new("Minimize all"))
             .clicked()
         {
-            if !app.native_enabled {
-                return;
-            }
-            for win in &app.managed_windows {
-                windows::minimize_window(win.hwnd);
-            }
+            app.minimize_all();
         }
         if ui
             .add_enabled(app.actions_available(), egui::Button::new("Restore all"))
             .clicked()
         {
-            if !app.native_enabled {
-                return;
-            }
-            for win in &app.managed_windows {
-                windows::restore_window(win.hwnd);
-            }
-            windows::focus_window(app.app_hwnd);
+            app.restore_all();
         }
     });
     ui.horizontal_wrapped(|ui| {
@@ -464,7 +516,34 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
             continue;
         }
         let compact = ui.available_width() < 350.0;
-        let height = if compact { 86.0 } else { 58.0 };
+        let button_font = egui::TextStyle::Button.resolve(ui.style());
+        let button_width = ["Focus", "Unpin"]
+            .into_iter()
+            .map(|label| {
+                ui.painter()
+                    .layout_no_wrap(label.into(), button_font.clone(), t.text)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        let button_size = egui::vec2(
+            (button_width + ui.spacing().button_padding.x * 2.0).max(52.0),
+            (ui.text_style_height(&egui::TextStyle::Button) + ui.spacing().button_padding.y * 2.0)
+                .max(ui.spacing().interact_size.y),
+        );
+        let actions_width = button_size.x * 2.0 + 6.0;
+        let name_height = ui.text_style_height(&egui::TextStyle::Body)
+            + ui.text_style_height(&egui::TextStyle::Small)
+            + 2.0;
+        let state_font = egui::FontId::proportional(11.0);
+        let state_height = ui.fonts(|fonts| fonts.row_height(&state_font));
+        let actions_height = button_size.y + 4.0 + state_height;
+        let height = 14.0
+            + if compact {
+                name_height + 8.0 + actions_height
+            } else {
+                name_height.max(actions_height)
+            };
         let (rect, row) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), height),
             egui::Sense::hover(),
@@ -492,7 +571,7 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
         ui.painter().rect_filled(rect, 4.0, fill);
         ui.painter().line_segment(
             [rect.left_bottom(), rect.right_bottom()],
-            Stroke::new(0.5, tokens.border),
+            Stroke::new(0.5_f32, tokens.border),
         );
         let handle_rect = egui::Rect::from_min_size(
             rect.min + egui::vec2(4.0, 5.0),
@@ -543,11 +622,11 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
         let name_right = if compact {
             rect.right() - 8.0
         } else {
-            rect.right() - 126.0
+            rect.right() - actions_width - 16.0
         };
         let name_rect = egui::Rect::from_min_max(
             rect.min + egui::vec2(54.0, 7.0),
-            egui::pos2(name_right, rect.top() + 50.0),
+            egui::pos2(name_right, rect.top() + 7.0 + name_height),
         );
         fixed_region(
             ui,
@@ -575,11 +654,14 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
         );
         let actions = egui::Rect::from_min_size(
             if compact {
-                egui::pos2(rect.right() - 122.0, rect.bottom() - 30.0)
+                egui::pos2(
+                    rect.right() - actions_width - 8.0,
+                    rect.top() + 7.0 + name_height + 8.0,
+                )
             } else {
-                egui::pos2(rect.right() - 122.0, rect.top() + 7.0)
+                egui::pos2(rect.right() - actions_width - 8.0, rect.top() + 7.0)
             },
-            egui::vec2(114.0, 26.0),
+            egui::vec2(actions_width, button_size.y),
         );
         fixed_region(
             ui,
@@ -588,23 +670,23 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if ui
-                    .add_enabled(
-                        app.actions_available(),
-                        egui::Button::new("Focus").min_size(egui::vec2(52.0, 24.0)),
-                    )
-                    .clicked()
-                    && app.native_enabled
-                {
-                    windows::focus_window(win.hwnd);
+                let focus_response = ui.add_enabled(
+                    app.actions_available(),
+                    egui::Button::new("Focus").min_size(button_size),
+                );
+                if focus_response.clicked() {
+                    app.focus_window(win.hwnd);
                 }
                 let pinned = assignment.rule_windows.contains(&Some(i));
-                let pin_response = ui.add_sized(
-                    [52.0, 24.0],
-                    egui::Button::new(if pinned { "Unpin" } else { "Pin" }),
+                let pin_response = ui.add(
+                    egui::Button::new(if pinned { "Unpin" } else { "Pin" }).min_size(button_size),
                 );
                 #[cfg(test)]
                 ui.ctx().data_mut(|d| {
+                    d.insert_temp(
+                        egui::Id::new(("test-window-focus", win.hwnd)),
+                        focus_response.rect,
+                    );
                     d.insert_temp(
                         egui::Id::new(("test-window-pin", win.hwnd)),
                         pin_response.rect,
@@ -615,12 +697,8 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 }
             },
         );
-        let state_pos = if compact {
-            egui::pos2(rect.left() + 54.0, rect.bottom() - 17.0)
-        } else {
-            egui::pos2(rect.right() - 122.0, rect.top() + 44.0)
-        };
-        ui.painter().text(
+        let state_pos = egui::pos2(actions.left(), actions.bottom() + 4.0 + state_height * 0.5);
+        let _state_rect = ui.painter().text(
             state_pos,
             egui::Align2::LEFT_CENTER,
             if win.is_minimized {
@@ -628,9 +706,13 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
             } else {
                 "Ready"
             },
-            egui::FontId::proportional(11.0),
+            state_font,
             t.text_muted,
         );
+        #[cfg(test)]
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new(("test-window-state", win.hwnd)), _state_rect);
+        });
         if let Some(source) = row.dnd_hover_payload::<isize>() {
             if *source != win.hwnd {
                 let after = ui.input(|i| {
@@ -641,7 +723,7 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 let y = if after { rect.bottom() } else { rect.top() };
                 ui.painter().line_segment(
                     [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                    Stroke::new(3.0, t.accent2),
+                    Stroke::new(3.0_f32, t.accent2),
                 );
             }
         }
@@ -705,7 +787,11 @@ fn pins(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 let mut slot = rule.slot.saturating_add(1);
                 ui.label("Slot");
                 if ui
-                    .add(egui::DragValue::new(&mut slot).range(1..=count.max(1)))
+                    .add(
+                        egui::DragValue::new(&mut slot)
+                            .range(1..=count.max(1))
+                            .clamp_existing_to_range(false),
+                    )
                     .changed()
                 {
                     rule.slot = slot - 1;
@@ -783,7 +869,7 @@ fn about(ui: &mut egui::Ui, app: &PsmApp) {
             ui.hyperlink_to("tront.xyz", "https://tront.xyz");
         });
     });
-    ui.label("Weighted grids, saved layouts and a workspace that looks like you.");
+    ui.label("Arrange windows with weighted grids, saved layouts and per-window pins.");
     ui.hyperlink_to(
         "Source & releases",
         "https://github.com/TrentSterling/powershellmanager",

@@ -1,10 +1,10 @@
 use crate::config::PinRule;
+use crate::history::WindowBackend;
 use crate::layout::LayoutPreset;
-use crate::monitor::{enumerate_monitors, resolve_monitor};
+use crate::monitor::{resolve_monitor, MonitorInfo};
 use crate::windows::ManagedWindow;
+use crate::windows::WindowSnapshot;
 use std::collections::HashSet;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 #[derive(Debug)]
 pub struct ArrangeResult {
@@ -12,53 +12,88 @@ pub struct ArrangeResult {
     pub skipped: usize,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+    pub snapshots: Vec<WindowSnapshot>,
 }
 
-/// Apply the exact manual queue shown in the UI; never enumerate or rank it again.
-pub fn arrange_ordered(
-    preset: &LayoutPreset,
-    monitor_spec: &str,
-    gap: i32,
-    disabled: &HashSet<usize>,
-    weights: Option<(&[f32], &[f32])>,
+impl ArrangeResult {
+    pub fn status(&self) -> String {
+        let mut status = format!(
+            "Arranged {} windows. {} skipped. {} errors.",
+            self.arranged,
+            self.skipped,
+            self.errors.len()
+        );
+        if !self.warnings.is_empty() {
+            status.push_str(&format!(" {}", self.warnings.join("; ")));
+        }
+        status
+    }
+}
+
+pub(crate) struct ArrangeSettings<'a> {
+    pub preset: &'a LayoutPreset,
+    pub monitor_spec: &'a str,
+    pub gap: i32,
+    pub disabled: &'a HashSet<usize>,
+    pub weights: Option<(&'a [f32], &'a [f32])>,
+    pub pins: &'a [PinRule],
+}
+
+pub(crate) fn arrange_with(
+    backend: &mut dyn WindowBackend,
+    monitors: &[MonitorInfo],
+    settings: &ArrangeSettings<'_>,
     windows: &[ManagedWindow],
-    pins: &[PinRule],
 ) -> ArrangeResult {
-    let monitors = enumerate_monitors();
     if monitors.is_empty() {
         return ArrangeResult {
             arranged: 0,
             skipped: windows.len(),
             errors: vec!["No monitors found".into()],
             warnings: Vec::new(),
+            snapshots: Vec::new(),
         };
     }
-    let area = resolve_monitor(&monitors, monitor_spec).work_area;
-    let (placements, warnings) =
-        crate::order::placements(preset, &area, gap, disabled, weights, windows, pins);
+    let area = resolve_monitor(monitors, settings.monitor_spec).work_area;
+    let (placements, warnings) = crate::order::placements(
+        settings.preset,
+        &area,
+        settings.gap,
+        settings.disabled,
+        settings.weights,
+        windows,
+        settings.pins,
+    );
+    execute_plan(backend, placements, windows.len(), warnings)
+}
+
+pub fn execute_plan(
+    backend: &mut dyn WindowBackend,
+    placements: Vec<(isize, crate::layout::Slot)>,
+    total_windows: usize,
+    warnings: Vec<String>,
+) -> ArrangeResult {
     let mut result = ArrangeResult {
         arranged: 0,
-        skipped: windows.len().saturating_sub(placements.len()),
+        skipped: total_windows.saturating_sub(placements.len()),
         errors: Vec::new(),
         warnings,
+        snapshots: Vec::new(),
     };
     for (hwnd, slot) in placements {
-        let positioned = unsafe {
-            SetWindowPos(
-                HWND(hwnd as *mut _),
-                None,
-                slot.x,
-                slot.y,
-                slot.w,
-                slot.h,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )
+        let snapshot = match backend.capture(hwnd) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                result.errors.push(error);
+                continue;
+            }
         };
-        match positioned {
-            Ok(()) => result.arranged += 1,
-            Err(error) => result
-                .errors
-                .push(format!("Could not position window {hwnd}: {error}")),
+        match backend.position(&snapshot, &slot) {
+            Ok(()) => {
+                result.arranged += 1;
+                result.snapshots.push(snapshot);
+            }
+            Err(error) => result.errors.push(error),
         }
     }
     result

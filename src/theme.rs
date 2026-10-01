@@ -352,7 +352,7 @@ pub fn install(ctx: &egui::Context, settings: ThemeSettings) {
     style.visuals.faint_bg_color =
         t.surface(mix(t.panel_raised, signal_blend, settings.zebra_strength));
     style.visuals.selection.bg_fill = t.surface(mix(t.accent_dim, signal_blend, 0.24));
-    style.visuals.selection.stroke = Stroke::new(1.0, t.text);
+    style.visuals.selection.stroke = Stroke::new(1.0_f32, t.text);
     style.visuals.widgets.noninteractive.fg_stroke.color = t.text;
     // Strong fill is used by slider rails and handles; keep it visible on cards.
     style.visuals.widgets.inactive.bg_fill = t.border;
@@ -363,18 +363,18 @@ pub fn install(ctx: &egui::Context, settings: ThemeSettings) {
     style.visuals.widgets.hovered.weak_bg_fill =
         t.surface(mix(t.row_hover, signal_blend, settings.hover_strength));
     style.visuals.widgets.hovered.fg_stroke.color = t.text;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, t.ink(t.secondary));
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, t.ink(t.secondary));
     style.visuals.widgets.active.bg_fill = t.accent_dim;
     style.visuals.widgets.active.weak_bg_fill = t.accent_dim;
     style.visuals.widgets.active.fg_stroke.color = t.text;
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, t.ink(t.accent));
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, t.ink(t.accent));
     style.visuals.widgets.open = style.visuals.widgets.active;
     style.visuals.hyperlink_color = t.ink(t.secondary);
     style.visuals.error_fg_color = t.ink(t.danger);
     style.visuals.warn_fg_color = t.ink(Color32::from_rgb(230, 160, 50));
-    style.visuals.window_stroke = Stroke::new(1.0, t.border);
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, t.border);
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, t.border);
+    style.visuals.window_stroke = Stroke::new(1.0_f32, t.border);
+    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, t.border);
+    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, t.border);
     style.visuals.window_corner_radius = settings.roundness.into();
     style.visuals.menu_corner_radius = settings.roundness.into();
     for widgets in [
@@ -529,75 +529,5 @@ pub fn from_legacy(index: usize) -> ThemeSettings {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn settings_round_trip() {
-        let settings = ThemeSettings::monke_portal();
-        assert_eq!(ThemeSettings::decode(&settings.encode()), Some(settings));
-    }
-
-    #[test]
-    fn malformed_settings_are_rejected() {
-        assert!(ThemeSettings::decode("broken").is_none());
-    }
-
-    #[test]
-    fn arbitrary_gradients_keep_composed_panel_text_readable_at_every_frost() {
-        for dark in [false, true] {
-            for frost in [0.0, 0.10, 0.45, 0.8, 1.0] {
-                let s = ThemeSettings {
-                    dark,
-                    gradient_strength: 1.0,
-                    frost,
-                    frost_light: frost,
-                    surface_tint: 1.0,
-                    ..Default::default()
-                };
-                let t = tokens(s);
-                for red in [0, 64, 128, 192, 255] {
-                    for green in [0, 64, 128, 192, 255] {
-                        for blue in [0, 64, 128, 192, 255] {
-                            let bg = composed_panel(s, Color32::from_rgb(red, green, blue));
-                            for fg in [t.text, t.text_muted, t.ink(t.accent), t.ink(t.secondary)] {
-                                assert!(
-                                    contrast_ratio(fg, bg) >= 4.5,
-                                    "{dark} {frost} {fg:?} on {bg:?}"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn full_range_controls_preserve_vivid_colors_and_frost_modes() {
-        let mut s = ThemeSettings {
-            gradient_strength: 1.0,
-            frost: 0.0,
-            frost_light: 1.0,
-            ..Default::default()
-        }
-        .normalized();
-        assert_eq!(s.gradient_strength, 1.0);
-        assert_eq!(s.active_frost(), 0.0);
-        assert_eq!(panel_color(s).a(), 0);
-        let blue = backdrop(s, Color32::BLUE);
-        assert!(
-            blue.b() > 200,
-            "blue was crushed by the old per-channel cap: {blue:?}"
-        );
-        s.dark = false;
-        assert_eq!(s.active_frost(), 1.0);
-        assert_eq!(panel_color(s).a(), 255);
-        *s.active_frost_mut() = 0.3;
-        s.dark = true;
-        assert_eq!(s.active_frost(), 0.0);
-        s.frost = 1.0;
-        assert_eq!(backdrop(s, Color32::RED), Color32::RED);
-        assert_eq!(composed_panel(s, Color32::RED), tokens(s).panel);
-    }
-}
+#[path = "theme/tests/settings.rs"]
+mod tests;
