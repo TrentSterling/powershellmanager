@@ -11,6 +11,22 @@ fn section(ui: &mut egui::Ui, label: &str, theme: &Theme) {
     ui.label(RichText::new(label).strong().color(theme.accent2));
 }
 
+/// Theme Studio and About, right to left, at the standard button size.
+fn header_links(ui: &mut egui::Ui, app: &mut PsmApp, compact: bool) {
+    if ui
+        .add(egui::Button::new("About").selected(app.detail_tab == 3))
+        .clicked()
+    {
+        app.detail_tab = 3;
+    }
+    if ui
+        .button(if compact { "Theme" } else { "Theme Studio" })
+        .clicked()
+    {
+        app.show_theme_studio = !app.show_theme_studio;
+    }
+}
+
 pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     app.install_theme(ctx);
     theme::paint_background(ctx, app.theme_settings);
@@ -19,6 +35,11 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     let screen = ctx.screen_rect();
     let compact_workspace = screen.height() < 480.0 || screen.width() < 360.0;
     let compact_header = screen.width() < 560.0 || compact_workspace;
+    // Narrow windows give the links their own row; only near the 280 x 300 minimum,
+    // where there is no height to spare, do the header buttons tighten instead.
+    let narrow = screen.width() < 360.0;
+    let link_row = narrow && screen.height() >= 480.0;
+    let squeeze = narrow && !link_row;
     egui::TopBottomPanel::top("brand")
         .frame(
             egui::Frame::NONE
@@ -53,12 +74,11 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 });
                 let brand_right = ui.min_rect().right();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // The 280 px minimum needs tighter buttons so the credit stays clear.
-                    let tiny = screen.width() < 360.0;
-                    if tiny {
+                    if squeeze {
                         ui.spacing_mut().button_padding = egui::vec2(5.0, 2.0);
+                        ui.spacing_mut().item_spacing.x = 3.0;
                     }
-                    crate::window_chrome::caption_buttons(ui, &tokens, compact_header);
+                    crate::window_chrome::caption_buttons(ui, &tokens);
                     if !compact_header {
                         ui.label(
                             RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
@@ -67,22 +87,8 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                                 .color(t.text_muted),
                         );
                     }
-                    ui.spacing_mut().item_spacing.x = if compact_header { 3.0 } else { 8.0 };
-                    if ui
-                        .add(egui::Button::new("About").selected(app.detail_tab == 3))
-                        .clicked()
-                    {
-                        app.detail_tab = 3;
-                    }
-                    if ui
-                        .button(if compact_header {
-                            "Theme"
-                        } else {
-                            "Theme Studio"
-                        })
-                        .clicked()
-                    {
-                        app.show_theme_studio = !app.show_theme_studio;
+                    if !link_row {
+                        header_links(ui, app, compact_header);
                     }
                     let row = ui.max_rect();
                     let left = ui.min_rect().left().max(brand_right);
@@ -92,6 +98,11 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     );
                 });
             });
+            if link_row {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    header_links(ui, app, true);
+                });
+            }
         });
     crate::window_chrome::edge_resize(ctx);
     if app.detail_tab != 3 {
@@ -99,7 +110,6 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
         .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(if compact_workspace { 8 } else { 12 }))
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                let button_height = if compact_workspace { 28.0 } else { 36.0 };
                 let enabled = app
                     .active_preset()
                     .slot_count()
@@ -108,8 +118,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     .add_enabled(
                         app.actions_available() && enabled > 0 && !app.managed_windows.is_empty(),
                         egui::Button::new(RichText::new(if compact_workspace { "Apply" } else { "Apply layout" }).strong())
-                            .fill(tokens.accent_dim)
-                            .min_size(if compact_workspace { egui::vec2(80.0, 28.0) } else { egui::vec2(140.0, 36.0) }),
+                            .fill(tokens.accent_dim),
                     )
                     .clicked()
                 {
@@ -117,25 +126,26 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 }
                 let can_undo = app.history.lock().is_ok_and(|history| history.can_undo());
                 let undo = ui.add_enabled(app.actions_available() && can_undo,
-                    egui::Button::new(if compact_workspace { "Undo" } else { "Undo layout" })
-                        .min_size(egui::vec2(0.0, button_height)));
+                    egui::Button::new(if compact_workspace { "Undo" } else { "Undo layout" }));
                 #[cfg(test)]
                 ctx.data_mut(|data| data.insert_temp(egui::Id::new("test-undo-button"), undo.rect));
                 if undo.on_hover_text("Restore positions and window states from the last Apply. Up to 20 steps per session.").clicked() {
                     app.undo_layout();
                 }
                 if ui
-                    .add_enabled(app.actions_available(), egui::Button::new("Refresh")
-                        .min_size(egui::vec2(0.0, button_height)))
+                    .add_enabled(app.actions_available(), egui::Button::new("Refresh"))
                     .clicked()
                 {
                     app.refresh_windows();
                 }
-                ui.label(format!(
-                    "{} windows / {} enabled slots",
-                    app.managed_windows.len(),
-                    enabled
-                ));
+                let windows = app.managed_windows.len();
+                let counts = if compact_header {
+                    format!("{windows} windows / {enabled} slots")
+                } else {
+                    format!("{windows} windows / {enabled} enabled slots")
+                };
+                // One unit: when it does not fit it moves down whole instead of splitting.
+                ui.add(egui::Label::new(counts).wrap_mode(egui::TextWrapMode::Extend));
             });
             let status = RichText::new(&app.status).small().color(t.text_muted);
             if compact_workspace {
@@ -342,13 +352,13 @@ fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.small_button("Equalize").clicked() {
+            if ui.button("Equalize").clicked() {
                 app.col_weights.clear();
                 app.row_weights.clear();
                 app.ensure_weights();
                 app.save_layout();
             }
-            if ui.small_button("Enable all").clicked() {
+            if ui.button("Enable all").clicked() {
                 app.disabled_cells.clear();
                 app.save_layout();
             }
@@ -433,11 +443,7 @@ fn controls(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 if ui.add(egui::Button::new(&grid.name).wrap()).clicked() {
                     app.load_saved_grid(&grid);
                 }
-                if ui
-                    .small_button("x")
-                    .on_hover_text("Delete saved grid")
-                    .clicked()
-                {
+                if ui.button("x").on_hover_text("Delete saved grid").clicked() {
                     app.delete_saved_grid(&grid.name);
                 }
             });
@@ -552,7 +558,7 @@ fn inventory(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
         } else {
             "Desktop order. Drag a handle to choose slots."
         });
-        if app.config.defaults.manual_order && ui.small_button("Reset order").clicked() {
+        if app.config.defaults.manual_order && ui.button("Reset order").clicked() {
             app.config.defaults.manual_order = false;
             app.save_config();
             app.refresh_windows();
@@ -856,7 +862,7 @@ fn pins(ui: &mut egui::Ui, app: &mut PsmApp, t: &Theme) {
                 if rule.slot >= count || app.disabled_cells.contains(&rule.slot) {
                     ui.colored_label(t.accent2, "Slot unavailable in this layout");
                 }
-                if ui.small_button("Remove").clicked() {
+                if ui.button("Remove").clicked() {
                     remove = Some(i);
                 }
             });

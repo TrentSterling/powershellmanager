@@ -269,6 +269,7 @@ fn viewing_an_out_of_range_pin_keeps_its_reservation_and_reports_the_problem() {
 fn about_opens_from_the_header_and_returns_to_the_workspace_at_every_size() {
     for size in [
         egui::vec2(280.0, 300.0),
+        egui::vec2(340.0, 900.0),
         egui::vec2(480.0, 760.0),
         egui::vec2(1080.0, 800.0),
     ] {
@@ -1933,6 +1934,7 @@ fn render_ui_review() {
         ("studio", egui::vec2(1280.0, 1000.0), false, true, false),
         ("light", egui::vec2(1080.0, 800.0), true, false, false),
         ("compact", egui::vec2(480.0, 760.0), false, false, false),
+        ("narrow", egui::vec2(340.0, 900.0), false, false, false),
         ("about", egui::vec2(1080.0, 800.0), false, false, false),
         (
             "minimum-about",

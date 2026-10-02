@@ -130,10 +130,10 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
                         {
                             s.move_stop(studio.selected_stop, position / 100.0);
                         }
-                        if ui.small_button("Reverse").clicked() {
+                        if ui.button("Reverse").clicked() {
                             s.reverse_gradient();
                         }
-                        if ui.small_button("Space evenly").clicked() {
+                        if ui.button("Space evenly").clicked() {
                             s.evenly_space();
                         }
                     });
@@ -232,7 +232,7 @@ pub fn show(ctx: &egui::Context, app: &mut PsmApp) {
                                                 .into();
                                     }
                                 }
-                                if ui.small_button("Delete").clicked() {
+                                if ui.button("Delete").clicked() {
                                     remove = Some(i);
                                 }
                             });

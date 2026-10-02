@@ -19,6 +19,10 @@
   its own minimize, maximize and hide-to-tray buttons and the version. Drag the bar
   or logo to move, double-click to maximize, and resize from any edge. Narrow
   windows shorten Theme Studio to Theme so the credit stays clear.
+- Every button shares the theme padding and height, including the caption buttons;
+  Apply no longer has its own oversized width. Windows narrower than 360 px give
+  Theme and About their own header row instead of shrinking them.
+- The window and slot count moves to the next line whole instead of splitting.
 
 ## 0.4.2 (2026-09-30)
 

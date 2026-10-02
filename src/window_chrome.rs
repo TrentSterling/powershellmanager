@@ -34,12 +34,11 @@ pub fn is_maximized(ctx: &egui::Context) -> bool {
 
 /// One raised caption button with a hand-painted glyph (line segments, never font
 /// glyphs, so no font can tofu them). Close is tinted with the danger color.
-fn button(ui: &mut egui::Ui, kind: Caption, t: &Tokens, compact: bool) -> egui::Response {
-    let size = if compact {
-        egui::vec2(22.0, 20.0)
-    } else {
-        egui::vec2(34.0, 27.0)
-    };
+fn button(ui: &mut egui::Ui, kind: Caption, t: &Tokens) -> egui::Response {
+    // Same height as a text button, so the whole header reads as one size.
+    let height =
+        ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+    let size = egui::vec2((height * 1.15).round(), height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let danger = kind == Caption::Close;
@@ -91,11 +90,11 @@ fn button(ui: &mut egui::Ui, kind: Caption, t: &Tokens, compact: bool) -> egui::
 
 /// Close, maximize/restore and minimize, laid out inside the header's existing
 /// right-to-left block (a second right-to-left block would get zero width).
-pub fn caption_buttons(ui: &mut egui::Ui, t: &Tokens, compact: bool) {
+pub fn caption_buttons(ui: &mut egui::Ui, t: &Tokens) {
     let ctx = ui.ctx().clone();
     let maximized = is_maximized(&ctx);
-    ui.spacing_mut().item_spacing.x = if compact { 2.0 } else { 4.0 };
-    if button(ui, Caption::Close, t, compact).clicked() {
+    ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(4.0);
+    if button(ui, Caption::Close, t).clicked() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
     let resize = if maximized {
@@ -103,10 +102,10 @@ pub fn caption_buttons(ui: &mut egui::Ui, t: &Tokens, compact: bool) {
     } else {
         Caption::Maximize
     };
-    if button(ui, resize, t, compact).clicked() {
+    if button(ui, resize, t).clicked() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
     }
-    if button(ui, Caption::Minimize, t, compact).clicked() {
+    if button(ui, Caption::Minimize, t).clicked() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
     }
 }
