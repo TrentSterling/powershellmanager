@@ -77,6 +77,15 @@ pub struct Defaults {
     pub manual_order: bool,
     #[serde(default = "default_decay_half_life")]
     pub decay_half_life_days: f64,
+    /// New matching windows move into the first free slot; placed windows stay put.
+    #[serde(default)]
+    pub auto_arrange: bool,
+    /// When a window closes, later windows slide up instead of leaving the hole.
+    #[serde(default)]
+    pub slide_to_fill: bool,
+    /// With every slot full, auto mode uses the same grid on another display.
+    #[serde(default)]
+    pub overflow_display: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +176,9 @@ impl Default for Defaults {
             smart_sort: false,
             manual_order: false,
             decay_half_life_days: default_decay_half_life(),
+            auto_arrange: false,
+            slide_to_fill: false,
+            overflow_display: false,
         }
     }
 }
@@ -221,68 +233,23 @@ impl PinRule {
 }
 
 pub fn load() -> Config {
-    if let Some(path) = config_path() {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(config) = toml::from_str::<Config>(&content) {
-                    log::info!("Loaded config from {}", path.display());
-                    return config;
-                } else {
-                    log::warn!("Failed to parse config at {}", path.display());
-                }
-            }
-        }
-    }
-
-    // Try CWD
-    let cwd_path = PathBuf::from("powershellmanager.toml");
-    if cwd_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cwd_path) {
-            if let Ok(config) = toml::from_str::<Config>(&content) {
-                log::info!("Loaded config from CWD");
-                return config;
-            }
-        }
-    }
-
-    log::info!("Using default config");
-    Config::default()
+    crate::persistence::load_toml(
+        settings_path()
+            .into_iter()
+            .chain([PathBuf::from("powershellmanager.toml")]),
+    )
 }
 
-pub fn save(config: &Config) {
-    if let Some(path) = config_path() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match toml::to_string_pretty(config) {
-            Ok(content) => {
-                if let Err(e) = atomic_write(&path, content.as_bytes()) {
-                    log::warn!("Failed to write config: {}", e);
-                } else {
-                    log::info!("Saved config to {}", path.display());
-                }
-            }
-            Err(e) => log::warn!("Failed to serialize config: {}", e),
-        }
-    }
+pub fn save(config: &Config, path: Option<&std::path::Path>) -> Result<(), String> {
+    let path = path.ok_or("Could not locate the settings directory")?;
+    crate::persistence::save_toml(path, config)
 }
 
-fn config_path() -> Option<PathBuf> {
+pub(crate) fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".powershellmanager").join("config.toml"))
 }
 
 /// Path to the activity database file.
 pub fn activity_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".powershellmanager").join("activity.toml"))
-}
-
-/// Commit a complete document; a crash cannot leave a half-written TOML file.
-pub fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(tmp, path)
 }

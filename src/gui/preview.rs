@@ -1,4 +1,5 @@
 use super::*;
+#[derive(Debug, PartialEq)]
 pub(super) enum PreviewAction {
     None,
     ToggleCell(usize),
@@ -6,8 +7,12 @@ pub(super) enum PreviewAction {
 }
 
 impl PreviewAction {
-    fn is_none(&self) -> bool {
-        matches!(self, PreviewAction::None)
+    fn with_clicked_cell(self, cell: Option<usize>) -> Self {
+        if matches!(self, Self::None) {
+            cell.map_or(self, Self::ToggleCell)
+        } else {
+            self
+        }
     }
 }
 
@@ -17,43 +22,68 @@ pub(super) fn draw_interactive_preview(
     ctx: &egui::Context,
     app: &mut PsmApp,
     theme: &Theme,
+    height_limit: f32,
 ) -> PreviewAction {
     let preset = app.active_preset();
-    let show_dividers = app.use_custom && app.custom_cols > 0 && app.custom_rows > 0;
+    let show_dividers = app.use_custom;
     let non_uniform = show_dividers && !app.weights_are_uniform();
 
+    let area = if app.monitors.is_empty() {
+        Rect {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        }
+    } else {
+        let work_area =
+            crate::monitor::resolve_monitor(&app.monitors, &app.config.defaults.monitor).work_area;
+        Rect {
+            x: 0,
+            y: 0,
+            w: work_area.w.max(1),
+            h: work_area.h.max(1),
+        }
+    };
+    let pad = 6.0;
     let preview_width = ui.available_width().max(60.0);
     let panel_height = ctx.screen_rect().height();
-    let max_preview_h = (panel_height * 0.4).max(40.0);
-    let preview_height = (preview_width * 9.0 / 16.0).min(max_preview_h);
-    let preview_size = egui::vec2(preview_width, preview_height);
-
-    let (response, painter) = ui.allocate_painter(preview_size, egui::Sense::click_and_drag());
-    let rect = response.rect;
+    let max_preview_h = (panel_height * 0.4).min(height_limit).max(24.0);
+    let scale = ((preview_width - pad * 2.0) / area.w as f32)
+        .min((max_preview_h - pad * 2.0) / area.h as f32);
+    let preview_size =
+        egui::vec2(area.w as f32 * scale, area.h as f32 * scale) + egui::vec2(pad * 2.0, pad * 2.0);
+    let (region, _) = ui.allocate_exact_size(
+        egui::vec2(preview_width, preview_size.y),
+        egui::Sense::hover(),
+    );
+    let rect = egui::Rect::from_center_size(region.center(), preview_size);
+    let response = ui.interact(
+        rect,
+        ui.id().with("layout-preview"),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(rect);
     #[cfg(test)]
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("test-preview-rect"), rect));
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::new("test-preview-rect"), rect);
+        d.insert_temp(egui::Id::new("test-preview-id"), response.id);
+    });
 
     // Background (monitor)
     painter.rect_filled(rect, 4.0, theme.surface);
     painter.rect_stroke(
         rect,
         4.0,
-        egui::Stroke::new(1.0, theme.border),
+        egui::Stroke::new(1.0_f32, theme.border),
         egui::StrokeKind::Outside,
     );
 
-    let pad = 6.0;
     let inner_w = preview_size.x - pad * 2.0;
     let inner_h = preview_size.y - pad * 2.0;
     let offset = rect.min + egui::vec2(pad, pad);
 
     // Compute slots using weights for custom grid, or preset for non-custom
-    let area = Rect {
-        x: 0,
-        y: 0,
-        w: 1920,
-        h: 1080,
-    };
     let gap_virtual = app.config.defaults.gap.clamp(0, 64);
 
     let slots = if show_dividers {
@@ -69,13 +99,24 @@ pub(super) fn draw_interactive_preview(
         preset.compute_slots(&area, gap_virtual)
     };
 
+    if slots.is_empty() {
+        app.dragging_divider = None;
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "No space for this grid",
+            egui::FontId::proportional(14.0),
+            theme.text_muted,
+        );
+        return PreviewAction::None;
+    }
+
     let scale_x = inner_w / area.w as f32;
     let scale_y = inner_h / area.h as f32;
 
     // Divider hit detection and rendering
     let divider_hit_px = 5.0;
     let hover_pos = response.hover_pos();
-    let mut hovered_divider: Option<(DividerAxis, usize)> = None;
 
     // Compute divider positions in screen coords (only for custom grid)
     let mut col_divider_x = Vec::new();
@@ -83,133 +124,98 @@ pub(super) fn draw_interactive_preview(
 
     if show_dividers {
         let cols = app.custom_cols as usize;
-        let rows = app.custom_rows as usize;
-        let usable_w_virtual = area.w - gap_virtual * (cols as i32 - 1);
-        let usable_h_virtual = area.h - gap_virtual * (rows as i32 - 1);
-
-        // Column divider x positions (between columns)
-        let mut cx = 0.0_f32;
-        for c in 0..cols - 1 {
-            let col_w = usable_w_virtual as f32 * app.col_weights[c];
-            cx += col_w;
-            let screen_x = offset.x
-                + (cx + gap_virtual as f32 * c as f32 + gap_virtual as f32 * 0.5) * scale_x;
-            col_divider_x.push(screen_x);
+        // Use the same rounded boundaries and clamped gaps as Apply.
+        for pair in slots.iter().take(cols).collect::<Vec<_>>().windows(2) {
+            col_divider_x
+                .push(offset.x + (pair[0].x + pair[0].w + pair[1].x) as f32 * 0.5 * scale_x);
         }
-
-        // Row divider y positions (between rows)
-        let mut ry = 0.0_f32;
-        for r in 0..rows - 1 {
-            let row_h = usable_h_virtual as f32 * app.row_weights[r];
-            ry += row_h;
-            let screen_y = offset.y
-                + (ry + gap_virtual as f32 * r as f32 + gap_virtual as f32 * 0.5) * scale_y;
-            row_divider_y.push(screen_y);
-        }
-
-        // Check hover on dividers
-        if let Some(hp) = hover_pos {
-            for (i, &dx) in col_divider_x.iter().enumerate() {
-                if (hp.x - dx).abs() < divider_hit_px {
-                    hovered_divider = Some((DividerAxis::Col, i));
-                    break;
-                }
-            }
-            if hovered_divider.is_none() {
-                for (i, &dy) in row_divider_y.iter().enumerate() {
-                    if (hp.y - dy).abs() < divider_hit_px {
-                        hovered_divider = Some((DividerAxis::Row, i));
-                        break;
-                    }
-                }
-            }
+        for pair in slots.iter().step_by(cols).collect::<Vec<_>>().windows(2) {
+            row_divider_y
+                .push(offset.y + (pair[0].y + pair[0].h + pair[1].y) as f32 * 0.5 * scale_y);
         }
     }
+    let hovered_divider = divider_at(
+        hover_pos,
+        rect,
+        &col_divider_x,
+        &row_divider_y,
+        divider_hit_px,
+    );
 
     // Drag interaction for dividers
     let mut action = PreviewAction::None;
 
     if show_dividers {
-        if response.drag_started() {
+        if response.drag_started_by(egui::PointerButton::Primary) {
             // Hit-test where the press began. A fast first movement may already
             // be outside the five-pixel handle by the time egui starts dragging.
-            if let Some(origin) = ctx.input(|i| i.pointer.press_origin()) {
-                if rect.contains(origin) {
-                    app.dragging_divider = col_divider_x
-                        .iter()
-                        .position(|x| (origin.x - x).abs() <= divider_hit_px)
-                        .map(|i| (DividerAxis::Col, i))
-                        .or_else(|| {
-                            row_divider_y
-                                .iter()
-                                .position(|y| (origin.y - y).abs() <= divider_hit_px)
-                                .map(|i| (DividerAxis::Row, i))
-                        });
-                }
-            }
+            let origin = ctx.input(|i| i.pointer.press_origin());
+            app.dragging_divider = origin
+                .zip(divider_at(
+                    origin,
+                    rect,
+                    &col_divider_x,
+                    &row_divider_y,
+                    divider_hit_px,
+                ))
+                .map(|(origin, (axis, index))| crate::app::DividerDrag {
+                    axis,
+                    index,
+                    grab_offset: match axis {
+                        DividerAxis::Col => origin.x - col_divider_x[index],
+                        DividerAxis::Row => origin.y - row_divider_y[index],
+                    },
+                });
         }
 
-        if response.dragged() {
-            if let Some((axis, idx)) = app.dragging_divider {
-                let delta = response.drag_delta();
-                let min_weight = 0.05;
-
-                match axis {
+        if response.dragged_by(egui::PointerButton::Primary) {
+            if let (Some(drag), Some(pointer)) =
+                (app.dragging_divider, response.interact_pointer_pos())
+            {
+                match drag.axis {
                     DividerAxis::Col => {
-                        let total_w = inner_w;
-                        let weight_delta = delta.x / total_w;
-                        let w0 = (app.col_weights[idx] + weight_delta).max(min_weight);
-                        let w1 = (app.col_weights[idx + 1] - weight_delta).max(min_weight);
-                        let sum = w0 + w1;
-                        let old_sum = app.col_weights[idx] + app.col_weights[idx + 1];
-                        app.col_weights[idx] = w0 / sum * old_sum;
-                        app.col_weights[idx + 1] = w1 / sum * old_sum;
+                        let gap = (slots[1].x - slots[0].x - slots[0].w) as f32;
+                        let usable = area.w as f32 - gap * (app.custom_cols - 1) as f32;
+                        let boundary = ((pointer.x - drag.grab_offset - offset.x) / scale_x
+                            - gap * (drag.index as f32 + 0.5))
+                            / usable;
+                        resize_pair(&mut app.col_weights, drag.index, boundary);
                     }
                     DividerAxis::Row => {
-                        let total_h = inner_h;
-                        let weight_delta = delta.y / total_h;
-                        let w0 = (app.row_weights[idx] + weight_delta).max(min_weight);
-                        let w1 = (app.row_weights[idx + 1] - weight_delta).max(min_weight);
-                        let sum = w0 + w1;
-                        let old_sum = app.row_weights[idx] + app.row_weights[idx + 1];
-                        app.row_weights[idx] = w0 / sum * old_sum;
-                        app.row_weights[idx + 1] = w1 / sum * old_sum;
+                        let gap =
+                            (slots[app.custom_cols as usize].y - slots[0].y - slots[0].h) as f32;
+                        let usable = area.h as f32 - gap * (app.custom_rows - 1) as f32;
+                        let boundary = ((pointer.y - drag.grab_offset - offset.y) / scale_y
+                            - gap * (drag.index as f32 + 0.5))
+                            / usable;
+                        resize_pair(&mut app.row_weights, drag.index, boundary);
                     }
                 }
             }
-        }
-
-        if response.drag_stopped() && app.dragging_divider.is_some() {
-            app.dragging_divider = None;
-            // Normalize weights
-            let col_sum: f32 = app.col_weights.iter().sum();
-            if col_sum > 0.0 {
-                for w in &mut app.col_weights {
-                    *w /= col_sum;
-                }
-            }
-            let row_sum: f32 = app.row_weights.iter().sum();
-            if row_sum > 0.0 {
-                for w in &mut app.row_weights {
-                    *w /= row_sum;
-                }
-            }
-            action = PreviewAction::WeightsChanged;
         }
     }
 
+    // A release can arrive while hidden. Reconcile with the current button state
+    // so a restored preview never retains a stale drag or loses changed widths.
+    if app.dragging_divider.is_some()
+        && (!show_dividers || !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary)))
+    {
+        app.dragging_divider = None;
+        app.col_weights = crate::app::normalized_weights(&app.col_weights, app.custom_cols);
+        app.row_weights = crate::app::normalized_weights(&app.row_weights, app.custom_rows);
+        action = PreviewAction::WeightsChanged;
+    }
+
     // Set cursor based on hover/drag state
-    if app.dragging_divider.is_some() || hovered_divider.is_some() {
-        let axis = app
-            .dragging_divider
-            .map(|(a, _)| a)
-            .or(hovered_divider.map(|(a, _)| a));
-        if let Some(a) = axis {
-            ui.ctx().set_cursor_icon(match a {
-                DividerAxis::Col => egui::CursorIcon::ResizeHorizontal,
-                DividerAxis::Row => egui::CursorIcon::ResizeVertical,
-            });
-        }
+    if let Some(axis) = app
+        .dragging_divider
+        .map(|drag| drag.axis)
+        .or(hovered_divider.map(|(axis, _)| axis))
+    {
+        ui.ctx().set_cursor_icon(match axis {
+            DividerAxis::Col => egui::CursorIcon::ResizeHorizontal,
+            DividerAxis::Row => egui::CursorIcon::ResizeVertical,
+        });
     }
 
     // Draw cells
@@ -227,6 +233,8 @@ pub(super) fn draw_interactive_preview(
             offset + egui::vec2(slot.x as f32 * scale_x, slot.y as f32 * scale_y),
             egui::vec2(slot.w as f32 * scale_x, slot.h as f32 * scale_y),
         );
+        #[cfg(test)]
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(("test-preview-cell", i)), slot_rect));
 
         let is_disabled = app.disabled_cells.contains(&i);
         let is_hovered = hover_pos.is_some_and(|p| slot_rect.contains(p))
@@ -258,7 +266,7 @@ pub(super) fn draw_interactive_preview(
             slot_rect,
             3.0,
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 if is_disabled {
                     theme.border
                 } else {
@@ -313,13 +321,7 @@ pub(super) fn draw_interactive_preview(
                         slot_rect.center() - egui::vec2(0.0, 12.0),
                         egui::Align2::CENTER_CENTER,
                         label,
-                        egui::FontId::proportional(
-                            if slot_rect.width() > 100.0 && slot_rect.height() > 80.0 {
-                                32.0
-                            } else {
-                                14.0
-                            },
-                        ),
+                        egui::FontId::proportional(32.0),
                         theme.text,
                     );
                     painter.text(
@@ -356,9 +358,11 @@ pub(super) fn draw_interactive_preview(
         let right = offset.x + inner_w;
 
         for (i, &dx) in col_divider_x.iter().enumerate() {
-            let is_active = app.dragging_divider == Some((DividerAxis::Col, i))
+            let is_active = app
+                .dragging_divider
+                .is_some_and(|drag| drag.axis == DividerAxis::Col && drag.index == i)
                 || hovered_divider == Some((DividerAxis::Col, i));
-            let stroke_w = if is_active { 2.5 } else { 1.0 };
+            let stroke_w: f32 = if is_active { 2.5 } else { 1.0 };
             let color = if is_active {
                 theme.accent
             } else {
@@ -371,9 +375,11 @@ pub(super) fn draw_interactive_preview(
         }
 
         for (i, &dy) in row_divider_y.iter().enumerate() {
-            let is_active = app.dragging_divider == Some((DividerAxis::Row, i))
+            let is_active = app
+                .dragging_divider
+                .is_some_and(|drag| drag.axis == DividerAxis::Row && drag.index == i)
                 || hovered_divider == Some((DividerAxis::Row, i));
-            let stroke_w = if is_active { 2.5 } else { 1.0 };
+            let stroke_w: f32 = if is_active { 2.5 } else { 1.0 };
             let color = if is_active {
                 theme.accent
             } else {
@@ -386,10 +392,38 @@ pub(super) fn draw_interactive_preview(
         }
     }
 
-    if let Some(cell_idx) = clicked_cell {
-        if action.is_none() {
-            return PreviewAction::ToggleCell(cell_idx);
-        }
-    }
-    action
+    action.with_clicked_cell(clicked_cell)
 }
+
+/// Hover and press use identical inclusive handle boundaries and axis priority.
+fn divider_at(
+    pointer: Option<egui::Pos2>,
+    rect: egui::Rect,
+    columns: &[f32],
+    rows: &[f32],
+    hit: f32,
+) -> Option<(DividerAxis, usize)> {
+    let pointer = pointer.filter(|point| rect.contains(*point))?;
+    columns
+        .iter()
+        .position(|x| (pointer.x - x).abs() <= hit)
+        .map(|index| (DividerAxis::Col, index))
+        .or_else(|| {
+            rows.iter()
+                .position(|y| (pointer.y - y).abs() <= hit)
+                .map(|index| (DividerAxis::Row, index))
+        })
+}
+
+fn resize_pair(weights: &mut [f32], index: usize, boundary: f32) {
+    let prefix: f32 = weights[..index].iter().sum();
+    let pair_sum = weights[index] + weights[index + 1];
+    // Small imported pairs still need a valid interval while keeping their total.
+    let minimum = 0.05_f32.min(pair_sum * 0.5);
+    weights[index] = (boundary - prefix).clamp(minimum, pair_sum - minimum);
+    weights[index + 1] = pair_sum - weights[index];
+}
+
+#[cfg(test)]
+#[path = "preview/tests.rs"]
+mod tests;

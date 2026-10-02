@@ -18,37 +18,37 @@ pub struct MonitorInfo {
     pub work_area: Rect,
 }
 
+struct EnumState {
+    monitors: Vec<(HMONITOR, Rect, bool)>,
+}
+
+unsafe extern "system" fn enum_callback(
+    hmon: HMONITOR,
+    _hdc: HDC,
+    _rect: *mut RECT,
+    lparam: LPARAM,
+) -> BOOL {
+    let state = &mut *(lparam.0 as *mut EnumState);
+
+    let mut info: MONITORINFOEXW = std::mem::zeroed();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+    if GetMonitorInfoW(hmon, &mut info.monitorInfo).as_bool() {
+        let wa = info.monitorInfo.rcWork;
+        let work_area = Rect {
+            x: wa.left,
+            y: wa.top,
+            w: wa.right - wa.left,
+            h: wa.bottom - wa.top,
+        };
+        let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
+        state.monitors.push((hmon, work_area, is_primary));
+    }
+
+    TRUE
+}
+
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
-    struct EnumState {
-        monitors: Vec<(HMONITOR, Rect, bool)>,
-    }
-
-    unsafe extern "system" fn enum_callback(
-        hmon: HMONITOR,
-        _hdc: HDC,
-        _rect: *mut RECT,
-        lparam: LPARAM,
-    ) -> BOOL {
-        let state = &mut *(lparam.0 as *mut EnumState);
-
-        let mut info: MONITORINFOEXW = std::mem::zeroed();
-        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-
-        if GetMonitorInfoW(hmon, &mut info.monitorInfo).as_bool() {
-            let wa = info.monitorInfo.rcWork;
-            let work_area = Rect {
-                x: wa.left,
-                y: wa.top,
-                w: wa.right - wa.left,
-                h: wa.bottom - wa.top,
-            };
-            let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
-            state.monitors.push((hmon, work_area, is_primary));
-        }
-
-        TRUE
-    }
-
     let mut state = EnumState {
         monitors: Vec::with_capacity(4),
     };
@@ -92,3 +92,7 @@ pub fn resolve_monitor<'a>(monitors: &'a [MonitorInfo], spec: &str) -> &'a Monit
         }
     }
 }
+
+#[cfg(test)]
+#[path = "monitor/tests.rs"]
+mod tests;

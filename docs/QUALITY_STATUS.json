@@ -1,0 +1,311 @@
+{
+  "objective": "make powershell manager truely awesome 100% coverage",
+  "status": "complete",
+  "coverage": {
+    "required": {
+      "lines": 100,
+      "functions": 100,
+      "regions": 100,
+      "branches": 100
+    },
+    "scope": "All production Rust files in src; no production-file exclusions or coverage-only alternate implementations",
+    "excluded": [
+      "test-only ui_tests and offscreen renderer",
+      "test-only native_audit",
+      "test-only action_tests",
+      "test-only activity/tests",
+      "test-only persistence/tests",
+      "test-only theme/tests",
+      "third-party dependencies",
+      "test-only tray/tests",
+      "test-only windows/tests",
+      "test-only hotkey/tests",
+      "test-only app/tests",
+      "test-only updates/tests",
+      "test-only monitor/tests",
+      "test-only config/tests",
+      "test-only gui/preview/tests"
+    ],
+    "latest": {
+      "lines": 100,
+      "functions": 100,
+      "regions": 100,
+      "branches": 100
+    },
+    "report": "target/coverage.json",
+    "command": "./scripts/coverage.ps1 -EnforceFullCoverage",
+    "strict_command": "./scripts/coverage.ps1 -EnforceFullCoverage",
+    "note": "Measured with cargo-llvm-cov 0.9.1, nightly manifest 2026-09-29, rustc 1.101.0-nightly (2026-09-28), LLVM 23.1.1. All 27 production src files count: 5115/5115 lines, 513/513 functions, 5805/5805 regions and 1008/1008 branch outcomes. The strict full gate passed with exit 0. Test-only preview action overrides were removed; tests and production share action availability, geometry, storage, focus polling and tray-state logic.",
+    "counts": {
+      "lines": {
+        "covered": 5115,
+        "count": 5115
+      },
+      "functions": {
+        "covered": 513,
+        "count": 513
+      },
+      "regions": {
+        "covered": 5805,
+        "count": 5805
+      },
+      "branches": {
+        "covered": 1008,
+        "count": 1008
+      }
+    },
+    "native_environment": "Explorer notification registration is rejected in the sandbox. Native tray and full coverage suite passed outside it on the normal desktop. Original tray-icon 0.19.3 also passed there; the vendored patch follows the documented structure contract and cleans registration failures."
+  },
+  "verified": [
+    {
+      "requirement": "Selected-display preview with portrait/ultrawide aspect and exact work-area gaps",
+      "evidence": "ui_tests::preview_matches_selected_work_area_and_preserves_aspect_at_every_window_size"
+    },
+    {
+      "requirement": "Precise divider resizing with minimum weights and small imported pairs",
+      "evidence": "ui_tests::divider_drag_tracks_pointer_with_large_gaps_and_keeps_minimum_cell_weights; ui_tests::divider_drag_preserves_tiny_imported_pairs_without_invalid_weights"
+    },
+    {
+      "requirement": "Every layout fills odd dimensions with positive non-overlapping slots",
+      "evidence": "ui_tests::every_preset_fills_odd_work_areas_without_remainder_seams_or_overlaps"
+    },
+    {
+      "requirement": "Bounded multi-step undo with partial apply failures, closed/changed owners, retries and preview isolation",
+      "evidence": "action_tests; ui_tests::undo_control_uses_shared_history_and_preview_cannot_restore_windows; native_audit::native_undo_restores_owned_windows_and_skips_closed_or_changed_owners"
+    },
+    {
+      "requirement": "Read-only text/JSON inventory with Unicode metadata and incompatible-mode validation",
+      "evidence": "action_tests::inventory_flags_are_read_only_and_incompatible_modes_fail_before_dispatch; action_tests::inventory_json_preserves_unicode_quotes_empty_titles_and_physical_bounds; real CLI inventory in scripts/coverage.ps1"
+    },
+    {
+      "requirement": "Single-count activity ranking, live focus, foreground loss, bounded numeric input, decay, deterministic ties and orderly worker shutdown",
+      "evidence": "activity::tests, including a real read-only poller with an isolated storage path"
+    },
+    {
+      "requirement": "Storage preserves original documents through serialization, short-write, sync and commit failures, cleans failed temporaries, handles collisions and supports concurrent writes",
+      "evidence": "6 persistence::tests; ui_tests::failed_atomic_replace_preserves_destination_and_removes_its_temporary_file"
+    },
+    {
+      "requirement": "Actual layout controls save/reload/delete/reset and preview action guards",
+      "evidence": "ui_tests::actual_layout_controls_save_reload_delete_and_reset_without_moving_windows"
+    },
+    {
+      "requirement": "Actual Theme Studio roll/undo/save/replace/load/copy and import validation",
+      "evidence": "ui_tests::actual_theme_controls_roll_undo_save_replace_load_copy_and_validate_imports"
+    },
+    {
+      "requirement": "Builtin preset identity survives saved-grid name collisions",
+      "evidence": "ui_tests::saved_grid_names_cannot_replace_builtin_presets failed before the fix and passes after it"
+    },
+    {
+      "requirement": "Minimum 280x300 workspace keeps all preview cells and primary actions reachable at 75%, 100% and 150% UI scale",
+      "evidence": "ui_tests::minimum_window_keeps_preview_cells_and_primary_controls_reachable failed before compact layout fixes and now passes; reviewed target/ui-review/minimum.png"
+    },
+    {
+      "requirement": "Tray events belong to the current icon and menu; drains are bounded; duplicate saved names retain index identity",
+      "evidence": "tray::tests plus native_audit_creates_rebuilds_themes_and_rejects_retired_tray_resources; all tray branches covered"
+    },
+    {
+      "requirement": "Explicit menu commands win over simultaneous hotkeys; action worker is joined; start failures are visible; hotkey resources release on exit and unwind",
+      "evidence": "action_tests worker and arbitration regressions; hotkey::tests including private F24 native audit; all hotkey branches covered"
+    },
+    {
+      "requirement": "Deterministic discovery rules preserve Unicode, negative coordinates and minimized state, reject unsafe/system windows, and read bounded titles with limited process access",
+      "evidence": "windows::tests, native discovery audit on owned offscreen HWNDs, and snapshot ownership/error tests"
+    },
+    {
+      "requirement": "GUI, tray and full action worker share desktop effects, current settings, ordering and multi-step history; poison and failure paths preserve Undo",
+      "evidence": "app::tests, including complete_worker_loop_preserves_menu_priority_updates_shared_history_and_closes_owned_viewport and poisoned_history_prevents_gui_and_tray_moves_and_poisoned_live_settings_are_reported"
+    },
+    {
+      "requirement": "Native startup uses explicit local storage and services; missing handles disable startup effects and invalid preset selection recovers before the first frame",
+      "evidence": "app::tests::native_startup_uses_explicit_storage_and_services_and_update_failure_is_nonfatal; unavailable_or_non_windows_native_handle_disables_actions_before_any_startup_effects; malformed_settings_weights_and_preset_rebuilds_recover_to_consistent_live_and_saved_state"
+    },
+    {
+      "requirement": "Semantic stable-version update checks reject drafts, prereleases, malformed JSON, HTTP failures, oversized/truncated replies and timeouts; publication respects shutdown and repaints",
+      "evidence": "6 updates::tests using the real HTTP client with owned loopback fixtures; updates.rs has complete line/function/region/branch coverage"
+    },
+    {
+      "requirement": "Actual About control displays the update and emits only the selected download URL without opening a browser",
+      "evidence": "ui_tests::about_shows_a_verified_update_and_emits_its_download_link_without_opening_a_browser"
+    },
+    {
+      "requirement": "Shared command dispatcher preserves inventory filters, display/gap, order, pins, enabled cells, exit codes, warnings, partial errors and read-only preview",
+      "evidence": "5 app::tests::command_* with controlled Desktop and GuiRunner; actual release --version/--help/--list JSON process checks"
+    },
+    {
+      "requirement": "Real focus/minimize/restore and invalid native positioning/restoration are audited without changing the visible input desktop",
+      "evidence": "native_audit::native_controls_use_a_private_desktop_and_never_switch_the_input_desktop; windows::tests::native_audit_invalid_native_position_and_restore_errors_are_preserved; tray registration failure is verified on an owned private desktop"
+    },
+    {
+      "requirement": "Activity worker startup failure stays nonfatal and stored preset selection remains consistent after deletion",
+      "evidence": "activity::tests::unavailable_worker_start_is_nonfatal_and_tracker_still_accepts_updates_and_shutdown; app::tests::deleting_selected_grid_saves_the_recovered_selection_and_pin_failures_do_not_create_rules"
+    },
+    {
+      "requirement": "Actual hidden native creation context starts the tray/action worker with isolated storage, real GUI runner completes read-only preview, hotkey resources release, and launch errors propagate",
+      "evidence": "native_audit::hidden_eframe_repaints_idle_and_exits_without_poll_spin calls app::tests::audit_native_creation_context_on_current_event_loop and audit_native_gui_runner_on_current_event_loop; full instrumented suite passed"
+    },
+    {
+      "requirement": "Minimize, restore and focus use shared desktop effects, refresh window state immediately, reject stale selections and keep preview inventory intact",
+      "evidence": "app::tests::actual_inventory_controls_use_shared_desktop_and_refresh_window_state_immediately; preview_inventory_controls_keep_rows_and_cannot_call_desktop_effects; private desktop native controls audit"
+    },
+    {
+      "requirement": "Actual display and preset menus persist selections and load saved weights/masks; pin controls edit slots and persist removal; replacement grids stay unique and overflow pins preserve existing reservations",
+      "evidence": "app::tests::actual_display_and_preset_menus_persist_selection_and_load_saved_weights; actual_pin_controls_edit_slots_show_unavailable_rules_and_persist_removal; saving_the_same_grid_replaces_its_weights_and_disabled_cells; pinning_an_overflow_window_uses_the_first_unreserved_slot_and_preserves_existing_pins"
+    },
+    {
+      "requirement": "Actual Theme Studio menus select all fonts and eight presets; gradient spacing/reversal preserve colors and layout; About expands bundled notices; Activity renders ranked data and tolerates poisoned state",
+      "evidence": "ui_tests::actual_theme_menus_gradient_controls_and_presets_preserve_the_layout; about_license_and_credits_expand_to_the_bundled_notices; activity::tests::actual_activity_tab_displays_ranked_apps_session_totals_and_handles_unavailable_data"
+    },
+    {
+      "requirement": "Layout aliases and side-count defaults accept valid limits and reject malformed or repeated prefixes/delimiters; invalid programmatic presets produce no slots",
+      "evidence": "ui_tests::layout_parser_aliases_limits_and_display_labels_are_consistent failed for focusfocus before the fix and passes after it; layout.rs has full line/function/region coverage"
+    },
+    {
+      "requirement": "Required JSON fields, every RGB channel and legacy field reject malformed data; v3 and legacy opacity migration retain preferences",
+      "evidence": "theme::storage::tests::every_required_json_field_rejects_missing_or_malformed_values; legacy_import_validates_each_field_and_retains_disabled_light_preferences; full theme/storage.rs line/function/region coverage"
+    },
+    {
+      "requirement": "Actual grid dimension edits update weights and saved settings; search matches titles/processes without altering Apply assignment; numeric and pointer peg edits preserve colors and layout",
+      "evidence": "ui_tests::actual_grid_dimension_controls_resize_weights_clear_disabled_cells_and_save; actual_search_matches_titles_and_processes_without_changing_the_apply_queue; actual_theme_peg_numeric_edit_and_drag_preserve_colors_and_layout"
+    },
+    {
+      "requirement": "Invalid saved themes report a visible error while preserving appearance; duplicate bound pins warn without double placement and invalid drag targets preserve order",
+      "evidence": "ui_tests::invalid_saved_theme_reports_the_problem_and_keeps_current_preferences failed before the feedback fix and passes after it; duplicate_bound_pins_are_reported_and_an_unknown_drag_target_preserves_order"
+    },
+    {
+      "requirement": "Nonfinite gradient phases and invalid peg edits stay safe; empty, nonfinite and overflowing rectangle geometry emits no unsafe mesh; bright outlines in light flat mode retain readable text",
+      "evidence": "theme::gradient::tests::nonfinite_phases_invalid_peg_edits_and_empty_rectangles_are_safe failed on overflowing geometry before the fix and passes after it; ui_tests::bright_outlines_in_a_light_flat_workspace_keep_text_readable"
+    },
+    {
+      "requirement": "Tray menu/icon/registration failures abort construction safely; theme update errors remain visible, preserve the tray and recover on retry",
+      "evidence": "tray::tests::menu_and_icon_failures_abort_setup_before_notification_registration; native_audit_creates_rebuilds_themes_and_rejects_retired_tray_resources calls app::tests::audit_theme_update_failure_is_visible; all tray production functions and branches covered"
+    },
+    {
+      "requirement": "Gradient geometry keeps complete, non-overlapping coverage at translated float precision limits; rendering and regression tests share one geometry implementation",
+      "evidence": "theme::gradient::tests::translated_rectangles_keep_complete_gradient_coverage_at_float_precision_limits failed with 0/64 square pixels before the fix and passes for eight angles after local clipping; all gradient production branches covered"
+    },
+    {
+      "requirement": "Extreme imported grid ratios remain positive after normalization; divider release shares the same validated normalization as loaded settings",
+      "evidence": "app::tests::imported_extreme_weight_ratios_remain_positive_after_normalization failed before the clamp fix and now passes; existing divider-drag regressions still pass"
+    },
+    {
+      "requirement": "Viewing an unavailable pin preserves its reservation and shows a warning instead of silently changing the destination",
+      "evidence": "ui_tests::viewing_an_out_of_range_pin_keeps_its_reservation_and_reports_the_problem failed with slot 99 changed to 3 before clamp_existing_to_range(false), and passes after it"
+    },
+    {
+      "requirement": "Actual queue dragging scrolls at both edges, preserves order on an outside release, tolerates a payload without a pointer and renders/commits a drop-after marker",
+      "evidence": "ui_tests::actual_window_drag_scrolls_at_both_edges_and_an_outside_release_keeps_order; actual_window_drop_after_a_row_draws_the_marker_and_commits_that_order; unavailable_quick_preset_keeps_the_current_selection"
+    },
+    {
+      "requirement": "Actual gap edits persist without moving windows; UI scale edits and peg clicks preserve theme colors and layout; closing Theme Studio flushes a pending change while another mouse button remains held",
+      "evidence": "app::tests::actual_gap_control_saves_its_value_without_moving_windows; ui_tests::actual_theme_scale_edit_and_peg_click_preserve_colors_and_layout; theme_studio_can_move_and_close_without_changing_layout"
+    },
+    {
+      "requirement": "Missing activity records do not resurrect deleted data or lose the next focus; low-focus records with remaining switches survive decay",
+      "evidence": "activity::tests::missing_activity_entries_do_not_resurrect_old_records_or_lose_the_next_focus; decay_applies_one_half_life_prunes_stale_records_and_ignores_clock_rollback"
+    },
+    {
+      "requirement": "Filename-only storage preserves the working directory; tiny work areas never emit nonpositive slots; real monitor-info failure keeps previous results and continues enumeration",
+      "evidence": "persistence::tests::a_filename_without_a_parent_roundtrips_without_changing_the_working_directory; ui_tests::tiny_work_areas_and_invalid_grid_dimensions_never_emit_nonpositive_slots; monitor::tests::failed_monitor_info_keeps_previous_results_and_continues_enumeration"
+    },
+    {
+      "requirement": "Builtin Apply uses equal slots, broad/unavailable pins retain their semantics, overflow reordering keeps existing reservations, and closing without a tray remains available",
+      "evidence": "app::tests::builtin_apply_uses_equal_slots_and_preserves_broad_and_unavailable_pins; close_without_a_tray_is_not_intercepted_and_hidden_preview_has_no_desktop_effects; malformed_settings_weights_and_preset_rebuilds_recover_to_consistent_live_and_saved_state now includes valid configured columns"
+    },
+    {
+      "requirement": "Interrupted divider drags finish when the hidden viewport returns; hovering and pressing share inclusive handle boundaries; competing click/keyboard actions cannot toggle slots while resizing",
+      "evidence": "ui_tests::hiding_the_preview_during_a_divider_drag_commits_on_return failed before the fix and passes after it; dragging_a_cell_and_clicking_a_divider_leave_slots_and_weights_unchanged; keyboard_activation_during_a_divider_drag_cannot_toggle_a_slot; gui::preview::tests"
+    },
+    {
+      "requirement": "Empty grid geometry renders a clear message; no-window and all-disabled layouts keep Apply disabled, and the real Apply/Undo buttons share history",
+      "evidence": "ui_tests::a_work_area_too_small_for_the_grid_renders_a_message_without_dividers; app::tests::empty_live_inventory_disables_apply_without_disabling_refresh; disabling_every_slot_disables_apply_until_a_slot_is_enabled; actual_apply_and_undo_buttons_share_history_and_restore_the_owned_windows"
+    },
+    {
+      "requirement": "Minimum Theme Studio keeps Close and saved-theme controls reachable at 75%, 100% and 150% UI scale",
+      "evidence": "ui_tests::theme_studio_fits_the_minimum_viewport_and_keeps_its_close_button_reachable and theme_studio_saved_controls_remain_usable_at_the_minimum_viewport exposed overflow before the fixes and pass after them; GPU minimum-studio and minimum-studio-saved captures visually reviewed"
+    },
+    {
+      "requirement": "Smart tray shows layout, window and slot counts, last result and visibility; Apply, Undo and Hide reflect availability; unchanged frames avoid notification updates; Unicode tips preserve UTF-16 boundaries",
+      "evidence": "tray::tests::tray_tooltips_report_visibility_counts_and_preserve_utf16_boundaries; native_audit_creates_rebuilds_themes_and_rejects_retired_tray_resources verifies actual native menu states, tooltip caching, update failure and retry"
+    },
+    {
+      "requirement": "Close hides to tray and preserves Undo; single and double left-click restore; explicit Quit exits; hidden Refresh updates inventory without moving windows",
+      "evidence": "app::tests::native_audit_app_tray_rebuilds_menu_binding_and_close_interception_use_owned_resources; tray_hide_show_and_refresh_commands_preserve_history_and_refresh_the_inventory; tray::tests::only_current_icon_left_button_release_opens_the_window (includes double-click ownership cases)"
+    },
+    {
+      "requirement": "Shared focus sampler and serialization/atomic-write engines cover error paths; limited-access owned process handle produces the real process-image query error",
+      "evidence": "activity::tests; persistence::tests; windows::tests::an_owned_process_handle_without_query_access_returns_no_name; all three production files have full coverage"
+    },
+    {
+      "requirement": "Private-desktop native audits close their handle after their dedicated thread exits, including any thread-owned helper resources",
+      "evidence": "An instrumented full run exposed SetThreadDesktop teardown ERROR_BUSY. Parent-owned HDESK lifetime and join-before-close replace the switch-back step. Ten native tests and the complete strict suite pass. Win32 API contracts: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddesktop and https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closedesktop"
+    },
+    {
+      "requirement": "Live app is available and was exercised on the user workspace",
+      "evidence": "User screenshot of build 2 reports 12 windows arranged, 0 skipped and 0 errors; user approved the result. Smart-tray build 4 was subsequently launched. UI fixes are now running in build 5 (PID 326784); the older copies are closed. Visibility, native tray handle and responsiveness verified by read-only inspection. See target/ui-polish-launch.json."
+    },
+    {
+      "requirement": "Header contains no tagline; About is always available and opens a separate page without scrolling past the layout or inventory",
+      "evidence": "ui_tests::about_opens_from_the_header_and_returns_to_the_workspace_at_every_size clicks real egui controls after scrolling the workspace at minimum, compact and wide sizes with 75%, 100% and 150% UI scale; configuration, weights and Undo stay unchanged. Offscreen about and minimum-about captures reviewed."
+    },
+    {
+      "requirement": "Focus and Pin/Unpin align and status text fits its row; footer actions share their height",
+      "evidence": "Expanded ui_tests::inventory_rows_do_not_overlap_at_wide_and_compact_widths reproduced a 3-pixel Focus/Pin baseline difference before the fix. Button dimensions, baseline, non-overlap and state bounds pass after the fix across UI scales and pin states. Offscreen inventory-bottom and inventory-wide captures confirm the complete last row fits the scroll clip and status is visible; footer heights visually reviewed."
+    },
+    {
+      "requirement": "Updated UI is running with no older app copies or disruptive interaction checks",
+      "evidence": "Packaged build 5 checksum and six source/packaged CLI checks pass. Prior build 4 stopped; only build 5 runs as PID 326784, responding with a visible root and native tray window. Read-only inspection only; no mouse input, user-desktop popup menus or forced focus. See target/ui-polish-launch.json."
+    }
+  ],
+  "remaining": [],
+  "native_test_policy": "Manipulate only test-owned HWNDs; never use --headless as a test or synthesize global desktop input",
+  "completion": "The local product iteration and measured 100% production coverage objective are achieved, including smart tray, close-to-tray behavior, the header About page and corrected button alignment. Remote native CI execution remains an infrastructure follow-up; the complete equivalent local suite passes.",
+  "build": {
+    "version": "0.4.2 (unreleased development build 5; header, About and row alignment)",
+    "artifact": "dist/PowerShellManager-0.4.2-build5/powershellmanager.exe",
+    "source_artifact": "target-publish/release/powershellmanager.exe",
+    "bytes": 11243520,
+    "sha256": "5c5ad746a21802af0b4e235cbc9a071bca37c58e54d8730d12966b21be922387",
+    "archive": {
+      "artifact": "dist/PowerShellManager-0.4.2-build5-windows-x64.zip",
+      "bytes": 4980512,
+      "sha256": "9c7af9faf70d93af7e6d3535594a9818ba121cbd0ad86584e26209995bed96f6"
+    },
+    "receipt": "target/portable-build5.json",
+    "launch_receipt": "target/ui-polish-launch.json",
+    "verified": [
+      "Release build succeeded; Windows ProductVersion and FileVersion 0.4.2",
+      "Source and packaged version/help/read-only JSON inventory exit 0",
+      "Packaged SHA-256 equals source and ZIP executable; ZIP CRC and bundled notices verified",
+      "Fourteen synthetic GPU captures rendered; About, minimum About, compact inventory bottom and wide inventory visually reviewed",
+      "Strict native/GPU/CLI coverage gate passed with all four metrics at 100%",
+      "Build 5 running as PID 326784, visible and responding with a native tray window; only one PowerShell Manager process remains"
+    ],
+    "note": "Updated UI launched normally after the previous copy was stopped directly. No mouse input, tray popup opening or foreground activation used. Saved configuration retained; session Undo starts fresh. Older portable artifacts remain intact."
+  },
+  "validation": {
+    "ordinary_tests": 170,
+    "native_and_gpu_instrumented_tests": 181,
+    "failed": 0,
+    "clippy": "clean with -D warnings",
+    "format": "clean",
+    "strict_coverage_gate": "PASS exit 0: 100% lines, functions, regions and branches (1008/1008 outcomes)",
+    "native_tests": 10,
+    "gpu_tests": 1,
+    "native_and_gpu_command": "./scripts/coverage.ps1 -EnforceFullCoverage (all ignored native audits and render_ui_review; only public marketing gallery skipped)",
+    "gpu_captures": 14
+  },
+  "updatedUtc": "2026-09-30T10:52:49.239621+00:00",
+  "ci": {
+    "workflow": ".github/workflows/ci.yml",
+    "ordinary": "Windows hosted tests, formatting, Clippy and release build",
+    "native": "Manual native_coverage input selects self-hosted Windows X64 psm-desktop; complete strict gate and synthetic capture artifacts",
+    "toolchain": "nightly-2026-09-29",
+    "coverage_tool": "cargo-llvm-cov 0.9.1",
+    "verification": "Workflow configured; GitHub API reports zero registered repository self-hosted runners. Equivalent complete native suite and strict gate passed locally; remote job has not executed."
+  },
+  "follow_ups": [
+    "Run the configured manual native GitHub Actions job when an interactive psm-desktop self-hosted runner exists. GitHub API reported zero registered repository runners; remote execution has not been claimed."
+  ]
+}

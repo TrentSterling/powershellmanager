@@ -79,11 +79,23 @@ pub struct Assignment {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
 pub fn assign(
     windows: &[ManagedWindow],
     pins: &[crate::config::PinRule],
     count: usize,
     disabled: &HashSet<usize>,
+) -> Assignment {
+    assign_with(windows, pins, count, disabled, &[])
+}
+
+/// Pins first, then each window's preferred (sticky) slot, then the queue fills the rest.
+pub fn assign_with(
+    windows: &[ManagedWindow],
+    pins: &[crate::config::PinRule],
+    count: usize,
+    disabled: &HashSet<usize>,
+    preferred: &[Option<usize>],
 ) -> Assignment {
     let mut plan = Assignment {
         slots: vec![None; count],
@@ -132,6 +144,17 @@ pub fn assign(
             placed.insert(i);
         }
     }
+    for (i, slot) in preferred.iter().enumerate() {
+        let Some(slot) = *slot else { continue };
+        if slot < count
+            && !disabled.contains(&slot)
+            && !placed.contains(&i)
+            && plan.slots[slot].is_none()
+        {
+            plan.slots[slot] = Some(i);
+            placed.insert(i);
+        }
+    }
     let mut remaining = (0..windows.len()).filter(|i| !placed.contains(i));
     for (slot, item) in plan.slots.iter_mut().enumerate() {
         if !disabled.contains(&slot) && item.is_none() {
@@ -141,6 +164,7 @@ pub fn assign(
     plan
 }
 
+#[cfg(test)]
 pub fn placements(
     preset: &LayoutPreset,
     area: &Rect,
@@ -150,11 +174,7 @@ pub fn placements(
     windows: &[ManagedWindow],
     pins: &[crate::config::PinRule],
 ) -> (Vec<(isize, Slot)>, Vec<String>) {
-    let slots = if let (Some((cw, rw)), LayoutPreset::Grid { cols, rows }) = (weights, preset) {
-        compute_weighted_grid(*cols, *rows, area, gap, cw, rw)
-    } else {
-        preset.compute_slots(area, gap)
-    };
+    let slots = grid_slots(preset, area, gap, weights);
     let plan = assign(windows, pins, slots.len(), disabled);
     (
         slots
@@ -164,4 +184,18 @@ pub fn placements(
             .collect(),
         plan.warnings,
     )
+}
+
+/// Slot rectangles for a layout on one work area, honoring custom grid weights.
+pub fn grid_slots(
+    preset: &LayoutPreset,
+    area: &Rect,
+    gap: i32,
+    weights: Option<(&[f32], &[f32])>,
+) -> Vec<Slot> {
+    if let (Some((cw, rw)), LayoutPreset::Grid { cols, rows }) = (weights, preset) {
+        compute_weighted_grid(*cols, *rows, area, gap, cw, rw)
+    } else {
+        preset.compute_slots(area, gap)
+    }
 }
