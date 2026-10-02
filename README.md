@@ -85,7 +85,7 @@ storage paths, and command tests use a controlled desktop.
 Display/preset menus, saved-grid weights, pin slot edits, font choices, theme
 presets and bundled notices are exercised through actual egui pointer events.
 Minimize, restore and focus refresh the inventory immediately after their action.
-See [the audit receipt](docs/RELEASE_AUDIT_0.4.2.md) for coverage and limits.
+See [the audit receipt](docs/RELEASE_AUDIT_0.5.0.md) for coverage and limits.
 
 Coverage uses cargo-llvm-cov 0.9.1 and Rust's llvm-tools-preview component. The
 script measures every production source file and excludes test-only modules.
