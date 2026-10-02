@@ -596,7 +596,8 @@ fn minimum_window_keeps_preview_cells_and_primary_controls_reachable() {
         let before_apply = app.status.clone();
         let _ = click_text(&ctx, &mut app, size, "Apply");
         assert_eq!(app.status, before_apply, "preview Apply must stay disabled");
-        let _ = click_text(&ctx, &mut app, size, "Theme Studio");
+        // Narrow headers shorten the label so the caption buttons fit.
+        let _ = click_text(&ctx, &mut app, size, "Theme");
         assert!(app.show_theme_studio);
         assert!(!app.native_enabled);
     }
@@ -2573,4 +2574,88 @@ fn auto_mode_toggles_save_and_unlock_their_options() {
     let _ = click_text(&ctx, &mut app, size, "Slide to fill gaps");
     let _ = click_text(&ctx, &mut app, size, "Overflow to other display");
     assert!(app.config.defaults.slide_to_fill && app.config.defaults.overflow_display);
+}
+
+fn chrome_frame(
+    ctx: &egui::Context,
+    app: &mut PsmApp,
+    events: Vec<Event>,
+    state: (bool, bool),
+    time: f64,
+) -> Vec<egui::ViewportCommand> {
+    let mut input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            Pos2::ZERO,
+            egui::vec2(1200.0, 900.0),
+        )),
+        events,
+        time: Some(time),
+        ..Default::default()
+    };
+    let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+    info.maximized = Some(state.0);
+    info.fullscreen = Some(state.1);
+    let output = ctx.run(input, |ctx| gui::draw(ctx, app));
+    output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .clone()
+}
+
+fn caption_rect(ctx: &egui::Context, label: &str) -> egui::Rect {
+    ctx.data(|d| d.get_temp(egui::Id::new("test-caption").with(label)))
+        .unwrap_or_else(|| panic!("caption {label} not drawn"))
+}
+
+#[test]
+fn custom_chrome_buttons_drag_gap_and_resize_edges_send_window_commands() {
+    use egui::ViewportCommand as Cmd;
+    let ctx = egui::Context::default();
+    let mut app = fixture();
+    let time = std::cell::Cell::new(0.0);
+    let press = |app: &mut PsmApp, pos: Pos2, state, moves: &[Pos2]| {
+        let mut sent = Vec::new();
+        for events in [vec![Event::PointerMoved(pos)], vec![pointer(pos, true)]]
+            .into_iter()
+            .chain(moves.iter().map(|&p| vec![Event::PointerMoved(p)]))
+            .chain([vec![pointer(*moves.last().unwrap_or(&pos), false)]])
+        {
+            time.set(time.get() + 0.02);
+            sent.extend(chrome_frame(&ctx, app, events, state, time.get()));
+        }
+        time.set(time.get() + 1.0);
+        sent
+    };
+    let normal = (false, false);
+    for _ in 0..3 {
+        chrome_frame(&ctx, &mut app, vec![], normal, 0.0);
+    }
+    let close = caption_rect(&ctx, "Hide to tray").center();
+    assert!(press(&mut app, close, normal, &[]).contains(&Cmd::Close));
+    let maximize = caption_rect(&ctx, "Maximize").center();
+    assert!(press(&mut app, maximize, normal, &[]).contains(&Cmd::Maximized(true)));
+    let minimize = caption_rect(&ctx, "Minimize").center();
+    assert!(press(&mut app, minimize, normal, &[]).contains(&Cmd::Minimized(true)));
+
+    // The empty header between the brand and the buttons moves the window.
+    let gap = Pos2::new(600.0, 30.0);
+    let dragged = press(&mut app, gap, normal, &[gap + egui::vec2(30.0, 10.0)]);
+    assert!(dragged.contains(&Cmd::StartDrag));
+    let mut twice = press(&mut app, gap, normal, &[]);
+    time.set(time.get() - 1.0);
+    twice.extend(press(&mut app, gap, normal, &[]));
+    assert!(twice.contains(&Cmd::Maximized(true)));
+
+    let top = Pos2::new(600.0, 2.0);
+    let resized = press(&mut app, top, normal, &[top + egui::vec2(0.0, 40.0)]);
+    assert!(resized.contains(&Cmd::BeginResize(egui::viewport::ResizeDirection::North)));
+
+    // Maximized: Restore replaces Maximize and the edges stop resizing.
+    let maximized = (true, false);
+    chrome_frame(&ctx, &mut app, vec![], maximized, time.get());
+    let restore = caption_rect(&ctx, "Restore").center();
+    assert!(press(&mut app, restore, maximized, &[]).contains(&Cmd::Maximized(false)));
+    let edge = press(&mut app, top, maximized, &[top + egui::vec2(0.0, 40.0)]);
+    assert!(!edge.iter().any(|c| matches!(c, Cmd::BeginResize(_))));
+    let full = press(&mut app, top, (false, true), &[top + egui::vec2(0.0, 40.0)]);
+    assert!(!full.iter().any(|c| matches!(c, Cmd::BeginResize(_))));
 }

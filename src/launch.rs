@@ -35,6 +35,8 @@ impl GuiRequest {
             .with_title(&title)
             .with_inner_size([1080.0, 800.0])
             .with_min_inner_size([280.0, 300.0])
+            // The brand header is the title bar (src/window_chrome.rs).
+            .with_decorations(false)
             .with_icon(std::sync::Arc::new(branding::icon(theme, 64)));
         Self {
             title,

@@ -27,6 +27,7 @@ mod tray;
 #[cfg(test)]
 mod ui_tests;
 mod updates;
+mod window_chrome;
 mod windows;
 
 use clap::Parser;

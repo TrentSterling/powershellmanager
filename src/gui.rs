@@ -27,11 +27,13 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(
+                let (rect, brand) = ui.allocate_exact_size(
                     egui::Vec2::splat(if compact_header { 24.0 } else { 32.0 }),
-                    egui::Sense::hover(),
+                    egui::Sense::click_and_drag(),
                 );
                 crate::branding::paint(ui, rect, app.theme_settings);
+                // The OS caption is gone; the logo and the empty bar move the window.
+                crate::window_chrome::drag_window(ui.ctx(), &brand);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.label(
@@ -49,19 +51,49 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                         "https://tront.xyz",
                     ));
                 });
+                let brand_right = ui.min_rect().right();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The 280 px minimum needs tighter buttons so the credit stays clear.
+                    let tiny = screen.width() < 360.0;
+                    if tiny {
+                        ui.spacing_mut().button_padding = egui::vec2(5.0, 2.0);
+                    }
+                    crate::window_chrome::caption_buttons(ui, &tokens, compact_header);
+                    if !compact_header {
+                        ui.label(
+                            RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .monospace()
+                                .size(11.0)
+                                .color(t.text_muted),
+                        );
+                    }
+                    ui.spacing_mut().item_spacing.x = if compact_header { 3.0 } else { 8.0 };
                     if ui
                         .add(egui::Button::new("About").selected(app.detail_tab == 3))
                         .clicked()
                     {
                         app.detail_tab = 3;
                     }
-                    if ui.button("Theme Studio").clicked() {
+                    if ui
+                        .button(if compact_header {
+                            "Theme"
+                        } else {
+                            "Theme Studio"
+                        })
+                        .clicked()
+                    {
                         app.show_theme_studio = !app.show_theme_studio;
                     }
+                    let row = ui.max_rect();
+                    let left = ui.min_rect().left().max(brand_right);
+                    crate::window_chrome::drag_region(
+                        ui,
+                        egui::Rect::from_x_y_ranges(brand_right..=left, row.y_range()),
+                    );
                 });
             });
         });
+    crate::window_chrome::edge_resize(ctx);
     if app.detail_tab != 3 {
         egui::TopBottomPanel::bottom("apply-bar")
         .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(if compact_workspace { 8 } else { 12 }))

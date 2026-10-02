@@ -15,6 +15,10 @@
 - Overflow to other display (off by default): with every slot full, new windows use
   the same grid on another display; otherwise they stay where they opened.
 - Auto placements enter session Undo, and pins still win over remembered slots.
+- Custom title bar matching Trontop: the brand header is the window caption, with
+  its own minimize, maximize and hide-to-tray buttons and the version. Drag the bar
+  or logo to move, double-click to maximize, and resize from any edge. Narrow
+  windows shorten Theme Studio to Theme so the credit stays clear.
 
 ## 0.4.2 (2026-09-30)
 
