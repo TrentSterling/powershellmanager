@@ -78,6 +78,60 @@ fn window(hwnd: isize) -> ManagedWindow {
         is_minimized: false,
     }
 }
+
+#[test]
+fn workspace_title_rules_preview_exactly_the_restore_plan() {
+    use crate::workspaces::{capture, match_rows, plan, TitleRule};
+    let desktop = TestDesktop::new([1]);
+    let mut desk = desktop.0.lock().unwrap();
+    let mut workspace = capture("Build".into(), &desk.fresh, &desk.monitors);
+    desk.fresh[0].title = "Building TrontEQ (72%)".into();
+    assert!(plan(&workspace, &desk.fresh, &desk.monitors).is_empty());
+    workspace.windows[0].title_rule = TitleRule::Contains;
+    workspace.windows[0].match_text = Some("TRONTEQ".into());
+    assert_eq!(match_rows(&workspace, &desk.fresh)[0].0.unwrap().hwnd, 1);
+    assert_eq!(plan(&workspace, &desk.fresh, &desk.monitors)[0].0, 1);
+    workspace.windows[0].match_text = Some(String::new());
+    assert!(plan(&workspace, &desk.fresh, &desk.monitors).is_empty());
+    workspace.windows[0].title_rule = TitleRule::ProcessOnly;
+    assert_eq!(plan(&workspace, &desk.fresh, &desk.monitors).len(), 1);
+    let mut second = desk.fresh[0].clone();
+    second.hwnd = 2;
+    second.title = "Another build".into();
+    desk.fresh.push(second);
+    assert!(match_rows(&workspace, &desk.fresh)[0]
+        .1
+        .starts_with("Ambiguous"));
+    assert!(plan(&workspace, &desk.fresh, &desk.monitors).is_empty());
+    desk.fresh.pop();
+    workspace.windows.push(workspace.windows[0].clone());
+    assert!(match_rows(&workspace, &desk.fresh)
+        .iter()
+        .all(|(w, status)| w.is_none() && status.starts_with("Conflict")));
+    assert!(plan(&workspace, &desk.fresh, &desk.monitors).is_empty());
+}
+
+#[test]
+fn old_workspaces_migrate_to_exact_titles_and_new_rules_roundtrip() {
+    use crate::workspaces::{capture, TitleRule, Workspace};
+    let desktop = TestDesktop::new([1]);
+    let desk = desktop.0.lock().unwrap();
+    let mut workspace = capture("Old".into(), &desk.fresh, &desk.monitors);
+    let legacy = toml::to_string(&workspace)
+        .unwrap()
+        .lines()
+        .filter(|s| !s.starts_with("title_rule"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let loaded: Workspace = toml::from_str(&legacy).unwrap();
+    assert_eq!(loaded.windows[0].title_rule, TitleRule::Exact);
+    assert!(loaded.windows[0].match_text.is_none());
+    workspace.windows[0].title_rule = TitleRule::Contains;
+    workspace.windows[0].match_text = Some("Build".into());
+    let loaded: Workspace = toml::from_str(&toml::to_string(&workspace).unwrap()).unwrap();
+    assert_eq!(loaded.windows[0].title_rule, TitleRule::Contains);
+    assert_eq!(loaded.windows[0].match_text.as_deref(), Some("Build"));
+}
 fn snapshot(hwnd: isize) -> WindowSnapshot {
     WindowSnapshot {
         hwnd,
@@ -260,6 +314,68 @@ fn live_app(config: Config, desktop: TestDesktop, scratch: &Scratch) -> PsmApp {
     app.native_enabled = true;
     app.app_hwnd = 444;
     app
+}
+
+#[test]
+fn named_workspace_roundtrip_restore_fallback_and_undo() {
+    let scratch = Scratch::new();
+    let desktop = TestDesktop::new([1, 2]);
+    desktop.0.lock().unwrap().monitors[0].work_area = Rect {
+        x: 0,
+        y: 0,
+        w: 1000,
+        h: 800,
+    };
+    let mut app = live_app(Config::default(), desktop.clone(), &scratch);
+    app.workspace_name = "Development".into();
+    app.save_workspace();
+    assert_eq!(app.config.workspace[0].windows.len(), 2);
+    let encoded = toml::to_string(&app.config).unwrap();
+    app.config = toml::from_str(&encoded).unwrap();
+    assert!(!encoded.contains("hwnd"));
+    {
+        let mut desk = desktop.0.lock().unwrap();
+        desk.monitors[0].index = 9;
+        desk.monitors[0].work_area = Rect {
+            x: -2000,
+            y: 20,
+            w: 2000,
+            h: 1600,
+        };
+        desk.position_error.insert(2);
+    }
+    app.config.defaults.auto_arrange = true;
+    app.restore_workspace(0);
+    assert!(!app.config.defaults.auto_arrange);
+    assert_eq!(
+        desktop.0.lock().unwrap().moved,
+        vec![(1, -1960, 80, 600, 400)]
+    );
+    assert!(app.status.contains("errors 1"));
+    app.undo_layout();
+    assert_eq!(desktop.0.lock().unwrap().restored, vec![1]);
+}
+
+#[test]
+fn workspace_skips_ambiguous_missing_minimized_and_invalid_records() {
+    let desktop = TestDesktop::new([1, 2]);
+    let mut desk = desktop.0.lock().unwrap();
+    desk.fresh[1].is_minimized = true;
+    let workspace = crate::workspaces::capture("Test".into(), &desk.fresh, &desk.monitors);
+    assert_eq!(workspace.windows.len(), 1);
+    let mut duplicate = desk.fresh[0].clone();
+    duplicate.hwnd = 3;
+    desk.fresh.push(duplicate);
+    assert!(crate::workspaces::plan(&workspace, &desk.fresh, &desk.monitors).is_empty());
+    assert!(crate::workspaces::plan(&workspace, &[], &desk.monitors).is_empty());
+    let mut corrupt = workspace.clone();
+    corrupt.windows[0].rect[0] = f64::NAN;
+    assert!(crate::workspaces::plan(&corrupt, &desk.fresh[..1], &desk.monitors).is_empty());
+    drop(desk);
+    let mut preview = PsmApp::preview(Config::default());
+    preview.config.workspace.push(workspace);
+    preview.restore_workspace(0);
+    assert!(!preview.history.lock().unwrap().can_undo());
 }
 
 pub(crate) fn audit_theme_update_failure_is_visible(tray: tray::TrayIcon) {

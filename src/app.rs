@@ -98,6 +98,7 @@ pub struct PsmApp {
     pub activity: Arc<Mutex<ActivityTracker>>,
     pub history: Arc<Mutex<crate::history::LayoutHistory>>,
     pub save_grid_name: String,
+    pub workspace_name: String,
     pub show_save_dialog: bool,
 }
 
@@ -287,6 +288,7 @@ impl PsmApp {
             activity: Arc::new(Mutex::new(activity)),
             history: Arc::new(Mutex::new(crate::history::LayoutHistory::default())),
             save_grid_name: String::new(),
+            workspace_name: String::new(),
             show_save_dialog: false,
         };
 
@@ -428,6 +430,73 @@ impl PsmApp {
         for err in &result.errors {
             log::warn!("  {}", err);
         }
+    }
+
+    pub fn save_workspace(&mut self) {
+        if !self.native_enabled {
+            return;
+        }
+        let name = self.workspace_name.trim().to_owned();
+        if name.is_empty() {
+            return;
+        }
+        self.refresh_windows();
+        let workspace =
+            crate::workspaces::capture(name.clone(), &self.managed_windows, &self.monitors);
+        if workspace.windows.is_empty() {
+            self.status =
+                "No visible managed windows to save. Minimized windows are skipped.".into();
+            return;
+        }
+        self.status = format!(
+            "Saved {} window positions as {name}.",
+            workspace.windows.len()
+        );
+        if let Some(existing) = self.config.workspace.iter_mut().find(|w| w.name == name) {
+            *existing = workspace;
+        } else {
+            self.config.workspace.push(workspace);
+        }
+        self.save_config();
+    }
+
+    pub fn restore_workspace(&mut self, index: usize) {
+        if !self.native_enabled {
+            return;
+        }
+        let Some(workspace) = self.config.workspace.get(index).cloned() else {
+            return;
+        };
+        self.config.defaults.auto_arrange = false;
+        self.save_config();
+        self.refresh_windows();
+        let plan = crate::workspaces::plan(&workspace, &self.managed_windows, &self.monitors);
+        let Ok(mut history) = self.history.lock() else {
+            self.status = "Could not access layout history. No windows moved.".into();
+            return;
+        };
+        let mut snapshots = Vec::new();
+        let mut errors = 0;
+        for (hwnd, slot) in plan {
+            match self.desktop.capture(hwnd).and_then(|snapshot| {
+                self.desktop.position(&snapshot, &slot)?;
+                Ok(snapshot)
+            }) {
+                Ok(snapshot) => {
+                    history.slots.remove(&hwnd);
+                    snapshots.push(snapshot);
+                }
+                Err(error) => {
+                    log::warn!("Workspace restore: {error}");
+                    errors += 1;
+                }
+            }
+        }
+        self.status = format!("{}: restored {}, skipped {}, errors {}. Auto arrange paused; Undo is available for moved windows.", workspace.name, snapshots.len(), workspace.windows.len().saturating_sub(snapshots.len() + errors), errors);
+        history.pending_status = None;
+        history.record(snapshots);
+        drop(history);
+        self.refresh_windows();
     }
 
     pub fn undo_layout(&mut self) {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (2026-10-12, local)
+
+- Preview saved workspace destinations and live matches before restoring.
+- Edit exact-title, title-fragment or process-only rules. Missing, ambiguous
+  and conflicting matches are skipped by the same resolver used by Restore.
+- Tighten header, panel, button and preview spacing; preserve small-window use.
+- 191 tests, 10 owned-resource native audits, strict Clippy, formatting, GPU
+  review and release build passed. See docs/WORKSPACES_0.7.0.md.
+
 ## 0.5.0 (2026-10-01)
 
 - Auto-arrange new windows (off by default): a new matching window moves into the

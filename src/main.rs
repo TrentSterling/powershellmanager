@@ -29,6 +29,7 @@ mod ui_tests;
 mod updates;
 mod window_chrome;
 mod windows;
+mod workspaces;
 
 use clap::Parser;
 

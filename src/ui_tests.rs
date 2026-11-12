@@ -1564,7 +1564,12 @@ fn theme_studio_can_move_and_close_without_changing_layout() {
     );
     let _ = frame(&ctx, &mut app, size, vec![pointer(roll, false)]);
     assert!(app.studio.save_pending);
-    let close = moved.right_top() + egui::vec2(-17.0, 17.0);
+    // ColorMagic can reflow the compact panel; hit the current close button.
+    for _ in 0..4 {
+        let _ = frame(&ctx, &mut app, size, vec![]);
+    }
+    let current = ctx.memory(|m| m.area_rect(id)).unwrap();
+    let close = current.right_top() + egui::vec2(-17.0, 17.0);
     let _ = frame(
         &ctx,
         &mut app,
@@ -1929,6 +1934,20 @@ fn render_ui_review() {
     std::fs::create_dir_all(folder).unwrap();
     let mut renderer = offscreen::Renderer::new();
     for (name, size, light, studio, preset) in [
+        (
+            "saved-workspaces",
+            egui::vec2(800.0, 720.0),
+            false,
+            false,
+            false,
+        ),
+        (
+            "saved-workspaces-light",
+            egui::vec2(480.0, 760.0),
+            true,
+            false,
+            false,
+        ),
         ("workspace", egui::vec2(1200.0, 900.0), false, false, false),
         ("presets", egui::vec2(1080.0, 800.0), false, false, true),
         ("studio", egui::vec2(1280.0, 1000.0), false, true, false),
@@ -1981,6 +2000,32 @@ fn render_ui_review() {
         app.use_custom = !preset;
         app.selected_preset = 2;
         app.show_theme_studio = studio;
+        if name.starts_with("saved-workspaces") {
+            app.detail_tab = 4;
+            app.monitors = vec![crate::monitor::MonitorInfo {
+                index: 0,
+                is_primary: true,
+                work_area: crate::monitor::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1920,
+                    h: 1080,
+                },
+            }];
+            for (i, w) in app.managed_windows.iter_mut().enumerate() {
+                w.rect = crate::monitor::Rect {
+                    x: (i % 3) as i32 * 640,
+                    y: (i / 3) as i32 * 540,
+                    w: 640,
+                    h: 540,
+                };
+            }
+            app.config.workspace.push(crate::workspaces::capture(
+                "Development".into(),
+                &app.managed_windows,
+                &app.monitors,
+            ));
+        }
         if name.ends_with("about") {
             app.detail_tab = 3;
         }

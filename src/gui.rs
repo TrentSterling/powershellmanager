@@ -44,12 +44,12 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
         .frame(
             egui::Frame::NONE
                 .fill(theme::panel_color(app.theme_settings))
-                .inner_margin(if compact_header { 8 } else { 16 }),
+                .inner_margin(if compact_header { 6 } else { 9 }),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let (rect, brand) = ui.allocate_exact_size(
-                    egui::Vec2::splat(if compact_header { 24.0 } else { 32.0 }),
+                    egui::Vec2::splat(if compact_header { 22.0 } else { 26.0 }),
                     egui::Sense::click_and_drag(),
                 );
                 crate::branding::paint(ui, rect, app.theme_settings);
@@ -63,7 +63,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                         } else {
                             "POWERSHELL MANAGER"
                         })
-                        .size(if compact_header { 16.0 } else { 20.0 })
+                        .size(if compact_header { 16.0 } else { 18.0 })
                         .strong(),
                     );
                     // Credit lives in the header so it shows without opening About.
@@ -107,7 +107,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
     crate::window_chrome::edge_resize(ctx);
     if app.detail_tab != 3 {
         egui::TopBottomPanel::bottom("apply-bar")
-        .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(if compact_workspace { 8 } else { 12 }))
+        .frame(egui::Frame::NONE.fill(tokens.panel).inner_margin(if compact_workspace { 6 } else { 8 }))
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let enabled = app
@@ -156,14 +156,14 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
         });
     }
     let wide = screen.width() >= 840.0;
-    if wide && app.detail_tab != 3 {
+    if wide && app.detail_tab != 3 && app.detail_tab != 4 {
         egui::SidePanel::left("layout-rail")
-            .exact_width(246.0)
+            .exact_width(230.0)
             .resizable(false)
             .frame(
                 egui::Frame::NONE
                     .fill(theme::panel_color(app.theme_settings))
-                    .inner_margin(14),
+                    .inner_margin(10),
             )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
@@ -173,7 +173,7 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                     });
             });
     }
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::panel_color(app.theme_settings)).inner_margin(if compact_workspace { 8 } else { 18 })).show(ctx, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::panel_color(app.theme_settings)).inner_margin(if compact_workspace { 6 } else { 10 })).show(ctx, |ui| {
         let workspace_height = ui.available_height();
         let _workspace = egui::ScrollArea::vertical().id_salt(if app.detail_tab == 3 { "about-scroll" } else { "workspace-scroll" }).show(ui, |ui| {
             if app.detail_tab == 3 {
@@ -183,9 +183,14 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 about(ui, app);
                 return;
             }
+            if app.detail_tab == 4 {
+                if ui.button("Back to layout").clicked() { app.detail_tab = 0; }
+                crate::workspaces::panel(ui, app);
+                return;
+            }
             let intro_y = ui.cursor().top();
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(if compact_workspace { "Layout" } else { "Layout workspace" }).size(if compact_workspace { 20.0 } else { 26.0 }).strong());
+                ui.label(RichText::new(if compact_workspace { "Layout" } else { "Layout workspace" }).size(if compact_workspace { 18.0 } else { 21.0 }).strong());
                 ui.colored_label(t.accent2, if app.use_custom { "CUSTOM" } else { "PRESET" });
             });
             if !compact_workspace {
@@ -218,11 +223,13 @@ pub fn draw(ctx: &egui::Context, app: &mut PsmApp) {
                 ui.selectable_value(&mut app.detail_tab, 0, format!("Windows ({})", app.managed_windows.len()));
                 ui.selectable_value(&mut app.detail_tab, 1, format!("Pins ({})", app.config.pin.len()));
                 ui.selectable_value(&mut app.detail_tab, 2, "Activity");
+                ui.selectable_value(&mut app.detail_tab, 4, "Workspaces");
             });
             ui.separator();
             match app.detail_tab {
                 1 => pins(ui, app, &t),
                 2 => activity(ui, app, &t),
+                4 => crate::workspaces::panel(ui, app),
                 _ => inventory(ui, app, &t)
             }
         });

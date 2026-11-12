@@ -1,5 +1,16 @@
 # PowerShell Manager
 
+Local v0.7.0 adds matching previews, editable rules and compact spacing to named window workspaces. Open **Workspaces**, enter a name and
+choose **Save positions**. **Restore workspace** matches already-open windows by
+process and the selected title rule, adapts positions to the current monitor work areas and
+supports **Undo layout**. Minimized windows are omitted when saving; missing or
+ambiguous matches are skipped. Restore pauses Auto arrange so it cannot overwrite
+the restored positions. Existing saved grids remain separate.
+
+Expand Match preview and rules to inspect numbered destinations and live matches.
+Rules support exact titles, stable title fragments or process-only matching.
+Conflicting rules are skipped. Old saves keep exact matching.
+
 A native Windows window arranger with weighted layouts,
 manual terminal ordering and ColorMagic Theme Studio.
 
@@ -61,6 +72,16 @@ named themes or import/export Trontop-compatible theme JSON. The four-square mar
 follows your colors in the app, window and tray, with dark and bright outlines.
 About is in the header and opens a separate page with the version, author,
 source link and credits. The window can shrink to 280 by 300 logical pixels.
+
+## Start with Windows
+
+Run `powershell -File scripts/install-user-startup.ps1` after building a release
+in `target-publish/release`, or pass `-SourceExe` with another release path.
+The installer copies it to `%LOCALAPPDATA%/Programs/PowerShellManager` and
+registers a per-user `PowerShellManager` scheduled task, ten seconds after sign-in.
+It uses normal user privileges and skips launching when the app is already open.
+The helper runs hidden; the app opens its normal window. Configuration stays in
+the existing user data location. Disable the task in Task Scheduler to stop autostart.
 
 ## Build and verify
 

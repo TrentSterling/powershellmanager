@@ -387,8 +387,8 @@ pub fn install(ctx: &egui::Context, settings: ThemeSettings) {
         widgets.corner_radius = (settings.roundness * 0.65).into();
     }
     style.interaction.selectable_labels = false;
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(11.0, 6.0);
+    style.spacing.item_spacing = egui::vec2(6.0, 5.0);
+    style.spacing.button_padding = egui::vec2(8.0, 4.0);
     style.spacing.scroll.floating = false;
     style.text_styles = [
         (

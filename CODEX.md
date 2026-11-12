@@ -1,5 +1,9 @@
 # PowerShellManager release work
 
+Local 0.7.0 adds workspace matching previews, editable rules and compact spacing. See
+`docs/WORKSPACES_0.7.0.md` for behavior and validation. Startup remains the existing
+per-user Limited task and launcher. No public release or website update was made.
+
 User approved the new UI, normal operation, public product page/downloads and an
 in-place update of the existing February blog post. Later requests add manual drag
 ordering, individual pins, zebra/alignment polish, a smaller window, theme-aware

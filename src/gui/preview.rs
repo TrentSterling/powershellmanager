@@ -48,7 +48,7 @@ pub(super) fn draw_interactive_preview(
     let pad = 6.0;
     let preview_width = ui.available_width().max(60.0);
     let panel_height = ctx.screen_rect().height();
-    let max_preview_h = (panel_height * 0.4).min(height_limit).max(24.0);
+    let max_preview_h = (panel_height * 0.32).min(height_limit).max(24.0);
     let scale = ((preview_width - pad * 2.0) / area.w as f32)
         .min((max_preview_h - pad * 2.0) / area.h as f32);
     let preview_size =

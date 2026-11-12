@@ -24,6 +24,8 @@ pub struct NamedTheme {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
+    pub workspace: Vec<crate::workspaces::Workspace>,
+    #[serde(default)]
     pub window_order: Vec<crate::order::WindowKey>,
     #[serde(default)]
     pub saved_theme: Vec<NamedTheme>,

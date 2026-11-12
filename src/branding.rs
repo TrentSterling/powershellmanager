@@ -40,11 +40,12 @@ pub fn icon(theme: ThemeSettings, size: u32) -> egui::IconData {
     }
 }
 pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, theme: ThemeSettings) {
+    let scale = rect.width().min(rect.height()) / 32.0;
     for row in 0..2 {
         for col in 0..2 {
             let cell = egui::Rect::from_min_size(
-                rect.min + egui::vec2(1.0 + col as f32 * 16.0, 1.0 + row as f32 * 16.0),
-                egui::vec2(13.0, 13.0),
+                rect.min + egui::vec2(1.0 + col as f32 * 16.0, 1.0 + row as f32 * 16.0) * scale,
+                egui::vec2(13.0, 13.0) * scale,
             );
             let rgb = if row == col {
                 theme.accent
